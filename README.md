@@ -125,54 +125,29 @@ python -m researchloop run workspaces/ai-research-agents \
   --source-policy source_policy.json
 ```
 
-## Quick Start
+## Run Research
 
-Install the local CLI from this checkout:
+After installing the CLI and configuring an OpenAI-compatible endpoint, start a
+research topic with the question you want answered:
 
 ```bash
-uv venv .venv
-uv pip install -e .
+python -m researchloop init software-news \
+  "What are the most important software industry updates this month?"
+python -m researchloop run workspaces/software-news --search tavily --max-results 5
 ```
 
-Configure an OpenAI-compatible endpoint in `.env` or your shell, then create a
-research workspace:
+The kept answer is written to `workspaces/software-news/report.md`. The same
+workspace also keeps `sources.jsonl`, `eval.md`, `results.tsv`, and every
+candidate iteration for audit.
+
+If you do not want web search, ingest trusted material first and run with
+`--search none`:
 
 ```bash
-python -m researchloop init ai-research-agents \
-  "What are the practical gaps in current AI deep research tools?"
-```
-
-Seed the workspace with a source you already trust:
-
-```bash
-python -m researchloop ingest workspaces/ai-research-agents \
+python -m researchloop ingest workspaces/software-news \
   --title "Internal notes" \
-  --url "local://notes" \
-  --text "Existing deep research tools produce good reports but rarely expose repeatable claim-level run history."
-```
-
-Run a bounded research iteration:
-
-```bash
-python -m researchloop run workspaces/ai-research-agents \
-  --backend openai-compatible \
-  --search none
-```
-
-Enable source discovery when Tavily is configured:
-
-```bash
-python -m researchloop run workspaces/ai-research-agents \
-  --search tavily \
-  --max-results 5
-```
-
-Inspect the kept report, source snapshots, verifier notes, and run log:
-
-```bash
-open workspaces/ai-research-agents/report.md
-open workspaces/ai-research-agents/eval.md
-open workspaces/ai-research-agents/results.tsv
+  --text "Your source text here."
+python -m researchloop run workspaces/software-news --search none
 ```
 
 ## Design Choices
