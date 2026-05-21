@@ -40,11 +40,11 @@ def synthesis_prompt(
     previous_claims: list[Claim],
 ) -> str:
     source_blocks = []
-    for source in sources[:20]:
+    for source in sources[:10]:
         content = source.content.strip().replace("\x00", "")
         source_blocks.append(
             f"[{source.id}] {source.title}\nURL: {source.url or 'n/a'}\n"
-            f"Type: {source.source_type}\nContent:\n{content[:6000]}"
+            f"Type: {source.source_type}\nContent:\n{content[:700]}"
         )
     source_text = "\n\n---\n\n".join(source_blocks) or "No sources supplied."
     claim_text = "\n".join(
@@ -67,7 +67,13 @@ Source records:
 Return JSON with this shape:
 {{
   "summary": "short summary of what changed in this iteration",
-  "report_markdown": "# Research Report\\n...",
+  "current_answer": ["short cited paragraph or bullet", "..."],
+  "evidence": [
+    {{
+      "claim": "evidence-backed claim with citation markup like [S1]",
+      "source_ids": ["S1"]
+    }}
+  ],
   "claims": [
     {{
       "text": "atomic claim with no citation markup inside the text",
@@ -80,9 +86,11 @@ Return JSON with this shape:
 }}
 
 Report requirements:
-- Use these sections exactly: # Research Report, ## Question, ## Current Answer,
-  ## Evidence, ## Open Gaps, ## Sources.
 - Cite every substantive sentence with source IDs like [S1].
 - Do not cite sources that were not supplied.
 - Do not hide uncertainty. If evidence is thin, make that visible.
+- Keep current_answer to 4-6 concise items.
+- Keep evidence to 6-8 high-value items.
+- Return no more than 8 high-value claims.
+- Prefer synthesis over repeating source descriptions.
 """

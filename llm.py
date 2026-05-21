@@ -64,7 +64,10 @@ class OpenAICompatibleLLM(ResearchLLM):
             )
 
     def plan_queries(self, topic: str, previous_report: str, gaps: list[str]) -> list[str]:
-        payload = self._complete_json(query_plan_prompt(topic, previous_report, gaps))
+        try:
+            payload = self._complete_json(query_plan_prompt(topic, previous_report, gaps))
+        except (LLMError, json.JSONDecodeError):
+            return [_extract_question(topic)]
         queries = payload.get("queries") or []
         return [str(query).strip() for query in queries if str(query).strip()][:5]
 
@@ -75,7 +78,18 @@ class OpenAICompatibleLLM(ResearchLLM):
         previous_report: str,
         previous_claims: list[Claim],
     ) -> ResearchResult:
-        payload = self._complete_json(synthesis_prompt(topic, sources, previous_report, previous_claims))
+        try:
+            payload = self._complete_json(synthesis_prompt(topic, sources, previous_report, previous_claims))
+        except (LLMError, json.JSONDecodeError):
+            report_markdown = self._complete_text(
+                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims)
+            )
+            return ResearchResult(
+                report_markdown=report_markdown.strip(),
+                claims=_claims_from_report(report_markdown),
+                gaps=_gaps_from_report(report_markdown),
+                summary="Generated via Markdown fallback because the endpoint returned malformed JSON.",
+            )
         claims = []
         for index, raw_claim in enumerate(payload.get("claims") or [], start=1):
             raw_source_ids = raw_claim.get("source_ids") or []
@@ -88,8 +102,17 @@ class OpenAICompatibleLLM(ResearchLLM):
                     notes=str(raw_claim.get("notes") or ""),
                 )
             )
+        report_markdown = str(payload.get("report_markdown") or "").strip()
+        if not report_markdown:
+            report_markdown = _build_report_markdown(
+                topic=topic,
+                sources=sources,
+                current_answer=payload.get("current_answer") or [],
+                evidence=payload.get("evidence") or [],
+                gaps=payload.get("gaps") or [],
+            )
         return ResearchResult(
-            report_markdown=str(payload.get("report_markdown") or "").strip(),
+            report_markdown=report_markdown,
             claims=claims,
             gaps=[str(item) for item in payload.get("gaps") or []],
             summary=str(payload.get("summary") or ""),
@@ -103,6 +126,7 @@ class OpenAICompatibleLLM(ResearchLLM):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": self.temperature,
+            "max_tokens": int(os.getenv("RESEARCH_MAX_TOKENS", "1800")),
             "response_format": {"type": "json_object"},
         }
         try:
@@ -118,8 +142,24 @@ class OpenAICompatibleLLM(ResearchLLM):
         except json.JSONDecodeError:
             match = re.search(r"\{.*\}", content, flags=re.DOTALL)
             if match:
-                return json.loads(match.group(0))
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError as exc:
+                    raise LLMError("The LLM response contained malformed JSON.") from exc
             raise LLMError("The LLM response was not valid JSON.")
+
+    def _complete_text(self, user_prompt: str) -> str:
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": int(os.getenv("RESEARCH_MAX_TOKENS", "2200")),
+        }
+        data = self._post("/chat/completions", body)
+        return _extract_chat_content(data)
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -162,3 +202,150 @@ def _extract_chat_content(data: dict[str, Any]) -> str:
                 parts.append(str(item.get("text") or item.get("content") or ""))
         return "".join(parts)
     raise LLMError("LLM endpoint returned an unsupported message content shape.")
+
+
+def _build_report_markdown(
+    topic: str,
+    sources: list[Source],
+    current_answer: list[Any],
+    evidence: list[Any],
+    gaps: list[Any],
+) -> str:
+    answer_lines = [str(item).strip() for item in current_answer if str(item).strip()]
+    evidence_lines = []
+    for item in evidence:
+        if isinstance(item, dict):
+            claim = str(item.get("claim") or "").strip()
+            source_ids = item.get("source_ids") or []
+            citations = " ".join(f"[{source_id}]" for source_id in source_ids if f"[{source_id}]" not in claim)
+            text = f"{claim} {citations}".strip()
+        else:
+            text = str(item).strip()
+        if text:
+            evidence_lines.append(text)
+    gap_lines = [str(item).strip() for item in gaps if str(item).strip()]
+    source_lines = [
+        f"- [{source.id}] {source.title} ({source.url or 'local/manual'})"
+        for source in sources
+    ]
+
+    return f"""# Research Report
+
+## Question
+
+{_extract_question(topic)}
+
+## Current Answer
+
+{_format_bullets(answer_lines)}
+
+## Evidence
+
+{_format_bullets(evidence_lines)}
+
+## Open Gaps
+
+{_format_bullets(gap_lines)}
+
+## Sources
+
+{chr(10).join(source_lines) or "- No sources recorded."}
+"""
+
+
+def markdown_synthesis_prompt(
+    topic: str,
+    sources: list[Source],
+    previous_report: str,
+    previous_claims: list[Claim],
+) -> str:
+    source_blocks = []
+    for source in sources[:10]:
+        content = source.content.strip().replace("\x00", "")
+        source_blocks.append(
+            f"[{source.id}] {source.title}\nURL: {source.url or 'n/a'}\n"
+            f"Type: {source.source_type}\nContent:\n{content[:700]}"
+        )
+    source_text = "\n\n---\n\n".join(source_blocks) or "No sources supplied."
+    return f"""Research topic:
+{topic}
+
+Previous report:
+{previous_report[:2500] if previous_report else "No prior report."}
+
+Previous claim count: {len(previous_claims)}
+
+Source records:
+{source_text}
+
+Write Markdown only. Use these exact sections:
+# Research Report
+## Question
+## Current Answer
+## Evidence
+## Open Gaps
+## Sources
+
+Rules:
+- Every substantive bullet or sentence must cite supplied source IDs like [S1].
+- Do not cite source IDs that were not supplied.
+- Keep the report under 900 words.
+- Prefer synthesis over source-by-source summary.
+- Include 6-8 evidence bullets.
+"""
+
+
+def _claims_from_report(markdown: str) -> list[Claim]:
+    claims: list[Claim] = []
+    for line in markdown.splitlines():
+        text = line.strip().lstrip("- ").strip()
+        if not text or not text.startswith(tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")):
+            continue
+        source_ids = re.findall(r"\[(S\d+)\]", text)
+        if not source_ids:
+            continue
+        clean_text = re.sub(r"\s*\[S\d+\]", "", text).strip()
+        claims.append(
+            Claim(
+                id=f"C{len(claims) + 1}",
+                text=clean_text,
+                source_ids=source_ids,
+                confidence="medium",
+                notes="Extracted from Markdown fallback report.",
+            )
+        )
+        if len(claims) >= 8:
+            break
+    return claims
+
+
+def _gaps_from_report(markdown: str) -> list[str]:
+    gaps: list[str] = []
+    in_gaps = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.lower() == "## open gaps":
+            in_gaps = True
+            continue
+        if in_gaps and stripped.startswith("## "):
+            break
+        if in_gaps and stripped.startswith("- "):
+            gaps.append(stripped[2:].strip())
+    return gaps
+
+
+def _format_bullets(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items) or "- Not enough evidence yet."
+
+
+def _extract_question(topic: str) -> str:
+    lines = topic.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "## question":
+            for candidate in lines[index + 1:]:
+                if candidate.strip() and not candidate.strip().startswith("#"):
+                    return candidate.strip()
+    for line in lines:
+        if line.strip() and not line.strip().startswith("#"):
+            return line.strip()
+    return "Research question not specified."

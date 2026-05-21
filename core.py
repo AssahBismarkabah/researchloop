@@ -108,7 +108,8 @@ def run_iteration(
     candidate = llm.synthesize(topic, sources, previous_report, previous_claims)
     evaluation = evaluate_report(candidate.report_markdown, candidate.claims, sources, candidate.gaps)
     best_score = float(previous_eval.get("best_score") or 0.0)
-    keep = best_score == 0.0 or evaluation.score >= best_score + min_delta
+    has_report = bool(candidate.report_markdown.strip())
+    keep = has_report and evaluation.score > 0 and (best_score == 0.0 or evaluation.score >= best_score + min_delta)
     status = "keep" if keep else "discard"
 
     write_text(iteration_dir / "candidate_report.md", candidate.report_markdown + "\n")
@@ -160,7 +161,7 @@ def evaluate_workspace(workspace: Path) -> Evaluation:
     sources = load_sources(workspace)
     claims = load_claims(workspace)
     report = read_text(workspace / "report.md")
-    gaps = _extract_prior_gaps(workspace)
+    gaps = _extract_report_gaps(report)
     evaluation = evaluate_report(report, claims, sources, gaps)
     write_text(workspace / "eval.md", format_evaluation(evaluation))
     return evaluation
@@ -214,6 +215,21 @@ def _extract_prior_gaps(workspace: Path) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("- ") and "gap" in stripped.lower():
             gaps.append(stripped[2:])
+    return gaps
+
+
+def _extract_report_gaps(markdown: str) -> list[str]:
+    gaps: list[str] = []
+    in_gaps = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.lower() == "## open gaps":
+            in_gaps = True
+            continue
+        if in_gaps and stripped.startswith("## "):
+            break
+        if in_gaps and stripped.startswith("- "):
+            gaps.append(stripped[2:].strip())
     return gaps
 
 
