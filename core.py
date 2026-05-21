@@ -6,6 +6,7 @@ from llm import ResearchLLM
 from models import Claim, Evaluation, Source
 from scoring import evaluate_report, format_evaluation
 from search import SearchBackend
+from source_policy import POLICY_FILENAME, SourcePolicy, write_source_policy
 from storage import (
     append_result_row,
     ensure_results_file,
@@ -25,10 +26,11 @@ from storage import (
 )
 
 
-def init_workspace(root: Path, name: str, question: str) -> Path:
+def init_workspace(root: Path, name: str, question: str, source_policy: SourcePolicy | None = None) -> Path:
     workspace = workspace_path(root, name)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "iterations").mkdir(exist_ok=True)
+    policy = source_policy or SourcePolicy.default()
     write_text(
         workspace / "topic.md",
         f"""# Research Topic
@@ -38,6 +40,8 @@ def init_workspace(root: Path, name: str, question: str) -> Path:
 {question.strip()}
 
 ## Source Policy
+
+Operational source-selection rules are stored in `{POLICY_FILENAME}`.
 
 - Prefer primary sources, official documentation, academic papers, standards,
   filings, original data, and direct product documentation.
@@ -51,6 +55,7 @@ Produce a source-backed report that improves coverage, citation quality,
 contradiction handling, and updateability over a one-shot answer.
 """,
     )
+    write_source_policy(workspace / POLICY_FILENAME, policy)
     write_text(workspace / "report.md", "# Research Report\n\nNo kept report yet.\n")
     write_jsonl(workspace / "sources.jsonl", [])
     write_jsonl(workspace / "claims.jsonl", [])

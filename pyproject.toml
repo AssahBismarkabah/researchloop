@@ -19,6 +19,7 @@ py-modules = [
     "prompts",
     "scoring",
     "search",
+    "source_policy",
     "storage",
 ]
 

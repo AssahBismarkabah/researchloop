@@ -7,6 +7,7 @@ from pathlib import Path
 from core import add_manual_source, evaluate_workspace, init_workspace, run_iteration
 from llm import LLMError, build_llm
 from search import SearchError, build_search_backend
+from source_policy import load_default_policy, load_policy_for_workspace
 from storage import read_text
 
 
@@ -31,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("name", help="Workspace name.")
     init_parser.add_argument("question", help="Research question.")
     init_parser.add_argument("--root", type=Path, default=Path("workspaces"), help="Workspace root directory.")
+    init_parser.add_argument(
+        "--source-policy",
+        type=Path,
+        default=None,
+        help="Optional source_policy.json to copy into the workspace.",
+    )
     init_parser.set_defaults(func=cmd_init)
 
     ingest_parser = subcommands.add_parser("ingest", help="Add a manual source to a workspace.")
@@ -53,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--model", default=None, help="Model name for the compatible endpoint.")
     run_parser.add_argument("--search", default="none", choices=["none", "tavily"])
+    run_parser.add_argument(
+        "--source-policy",
+        type=Path,
+        default=None,
+        help="Optional source_policy.json override for this run.",
+    )
     run_parser.add_argument("--max-results", type=int, default=5)
     run_parser.add_argument("--min-delta", type=float, default=0.1)
     run_parser.set_defaults(func=cmd_run)
@@ -69,7 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    workspace = init_workspace(args.root, args.name, args.question)
+    policy = load_default_policy(args.source_policy)
+    workspace = init_workspace(args.root, args.name, args.question, source_policy=policy)
     print(workspace)
     return 0
 
@@ -83,7 +97,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     llm = build_llm(args.backend, model=args.model)
-    search_backend = build_search_backend(args.search)
+    source_policy = load_policy_for_workspace(args.workspace, args.source_policy)
+    search_backend = build_search_backend(args.search, source_policy=source_policy)
     for _ in range(args.iterations):
         result = run_iteration(
             workspace=args.workspace,

@@ -25,7 +25,8 @@ This file describes how to run a bounded autonomous research experiment.
    export TAVILY_API_KEY="..."
    ```
 
-5. Add any seed sources with `python -m researchloop ingest`.
+5. Review `source_policy.json`, then add any seed sources with
+   `python -m researchloop ingest`.
 
 ## Research Loop
 
@@ -43,7 +44,8 @@ python -m researchloop run workspaces/<name> --search none
 
 Each iteration:
 
-1. Reads `topic.md`, `sources.jsonl`, `claims.jsonl`, and `report.md`.
+1. Reads `topic.md`, `source_policy.json`, `sources.jsonl`, `claims.jsonl`,
+   and `report.md`.
 2. Asks the LLM for targeted search queries.
 3. Adds new source snapshots if search is enabled.
 4. Asks the LLM to write a candidate report and claim set.
@@ -57,6 +59,7 @@ Each iteration:
 - Do not claim completeness when the source set is thin.
 - Every substantive report claim must cite source IDs like `[S1]`.
 - Prefer primary sources and official documentation over summaries.
+- Keep source-selection rules in `source_policy.json`, not in `.env`.
 - Keep source snapshots, even when an iteration is discarded.
 - Treat the score as a guide, not as truth.
 - Stop after the agreed iteration or budget cap.

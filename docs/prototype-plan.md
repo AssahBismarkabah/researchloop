@@ -43,6 +43,7 @@ In scope:
 - OpenAI-compatible chat-completions endpoint;
 - manual source ingestion;
 - optional Tavily search;
+- reviewable source policy in `source_policy.json`;
 - candidate iterations stored under `iterations/`;
 - keep/discard scoring;
 - `results.tsv` run log;
@@ -74,5 +75,7 @@ The experiment is promising if:
 - The LLM can still write unsupported prose; the evaluator only catches
   detectable citation problems.
 - Search quality depends on the configured search backend.
+- Domain constraints are policy choices, so they belong in `source_policy.json`
+  and should be reviewed per research topic.
 - Human review remains mandatory for legal, medical, financial, policy, or
   other high-stakes topics.

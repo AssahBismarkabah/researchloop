@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ from llm import ResearchLLM
 from models import Claim, ResearchResult, Source
 from scoring import evaluate_report
 from search import NoSearch
+from source_policy import SourcePolicy, load_policy_for_workspace
 from storage import load_claims, read_text
 
 
@@ -83,6 +85,47 @@ class CoreTests(unittest.TestCase):
             self.assertIn("[S1]", read_text(workspace / "report.md"))
             self.assertEqual(load_claims(workspace)[0].id, "C1")
             self.assertIn("keep", read_text(workspace / "results.tsv"))
+
+    def test_init_writes_reviewable_source_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(
+                Path(tmp),
+                "policy test",
+                "What should search prefer?",
+                source_policy=SourcePolicy(
+                    include_domains=["Example.com", "https://docs.example.com/path"],
+                    exclude_domains=["forum.example.com"],
+                ),
+            )
+
+            policy = json.loads((workspace / "source_policy.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(policy["include_domains"], ["example.com", "docs.example.com"])
+            self.assertEqual(policy["exclude_domains"], ["forum.example.com"])
+            self.assertIn("source_policy.json", read_text(workspace / "topic.md"))
+
+    def test_source_policy_filters_domains(self) -> None:
+        policy = SourcePolicy(
+            include_domains=["example.com"],
+            exclude_domains=["forum.example.com"],
+        )
+
+        self.assertTrue(policy.allows_url("https://docs.example.com/reference"))
+        self.assertFalse(policy.allows_url("https://forum.example.com/thread"))
+        self.assertFalse(policy.allows_url("https://unrelated.test/article"))
+
+    def test_workspace_policy_resolution_prefers_workspace_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(
+                Path(tmp),
+                "policy resolution",
+                "Which policy is used?",
+                source_policy=SourcePolicy(include_domains=["workspace.example"]),
+            )
+
+            policy = load_policy_for_workspace(workspace)
+
+            self.assertEqual(policy.include_domains, ["workspace.example"])
 
     def test_evaluator_penalizes_unsupported_claims(self) -> None:
         sources = [
