@@ -97,9 +97,8 @@ with `response_format: {"type": "json_object"}`.
 Manual source ingestion works without a search API. Automated web search uses
 Tavily when `TAVILY_API_KEY` is set and `--search tavily` is passed.
 
-Credentials belong in `.env`. Source-selection rules belong in
-`source_policy.json`, and `researchloop init` copies that policy into every
-workspace so runs remain auditable.
+Source-selection rules belong in `source_policy.json`, and `researchloop init`
+copies that policy into every workspace so runs remain auditable.
 
 ```json
 {
@@ -128,21 +127,22 @@ python -m researchloop run workspaces/ai-research-agents \
 
 ## Quick Start
 
-Create and install the local environment:
+Install the local CLI from this checkout:
 
 ```bash
 uv venv .venv
 uv pip install -e .
 ```
 
-Create a workspace:
+Configure an OpenAI-compatible endpoint in `.env` or your shell, then create a
+research workspace:
 
 ```bash
 python -m researchloop init ai-research-agents \
   "What are the practical gaps in current AI deep research tools?"
 ```
 
-Add a manual source:
+Seed the workspace with a source you already trust:
 
 ```bash
 python -m researchloop ingest workspaces/ai-research-agents \
@@ -151,16 +151,15 @@ python -m researchloop ingest workspaces/ai-research-agents \
   --text "Existing deep research tools produce good reports but rarely expose repeatable claim-level run history."
 ```
 
-Run one iteration with only manual sources:
+Run a bounded research iteration:
 
 ```bash
 python -m researchloop run workspaces/ai-research-agents \
   --backend openai-compatible \
-  --search none \
-  --model "$RESEARCH_MODEL"
+  --search none
 ```
 
-Run with Tavily source discovery:
+Enable source discovery when Tavily is configured:
 
 ```bash
 python -m researchloop run workspaces/ai-research-agents \
@@ -168,10 +167,12 @@ python -m researchloop run workspaces/ai-research-agents \
   --max-results 5
 ```
 
-Re-score the kept report:
+Inspect the kept report, source snapshots, verifier notes, and run log:
 
 ```bash
-python -m researchloop evaluate workspaces/ai-research-agents
+open workspaces/ai-research-agents/report.md
+open workspaces/ai-research-agents/eval.md
+open workspaces/ai-research-agents/results.tsv
 ```
 
 ## Design Choices
