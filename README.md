@@ -1,8 +1,8 @@
 # ResearchLoop
 
 `ResearchLoop` is a local, file-based research runner for auditable deep
-research. It is inspired by Karpathy's `autoresearch` control loop, but the
-target is source-backed topic research instead of GPU model training.
+research. It runs a repeatable improve-or-discard loop where source-backed
+reports are treated as versioned research artifacts.
 
 The core idea is simple:
 
@@ -42,10 +42,10 @@ state.json            # current best score and iteration
 iterations/           # candidate artifacts for every run
 ```
 
-`program.md` is the human-facing operating document, similar in spirit to
-`autoresearch`: it tells an agent how to run bounded research work. The source
-and report artifacts stay as normal files so humans can review, edit, diff, and
-rerun the process without trusting hidden state.
+`program.md` is the human-facing operating document: it tells an agent how to
+run bounded research work. The source and report artifacts stay as normal files
+so humans can review, edit, diff, and rerun the process without trusting hidden
+state.
 
 ## Verification
 
@@ -195,3 +195,7 @@ source policy, run artifacts, scoring, and CLI tests are in place.
 It is still not a production research platform. The next maturity work is better
 source extraction, richer verifier checks, budget controls, provider retries,
 and stronger topic-specific source policy templates.
+
+## Notable Links
+
+- [`karpathy/autoresearch`](https://github.com/karpathy/autoresearch)
