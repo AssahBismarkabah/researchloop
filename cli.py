@@ -8,7 +8,7 @@ from core import add_manual_source, evaluate_workspace, init_workspace, run_iter
 from llm import LLMError, build_llm
 from run_config import load_default_run_config, load_run_config_for_workspace
 from search import SearchError, build_search_backend
-from source_policy import load_default_policy, load_policy_for_workspace
+from source_policy import load_default_policy, load_policy_for_workspace, policy_for_question
 from storage import read_text
 
 
@@ -125,7 +125,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         iterations=args.iterations,
     )
     llm = build_llm(config.backend, model=config.model, synthesis_mode=config.synthesis_mode)
-    source_policy = load_policy_for_workspace(args.workspace, args.source_policy)
+    source_policy = policy_for_question(
+        load_policy_for_workspace(args.workspace, args.source_policy),
+        read_text(args.workspace / "topic.md"),
+    )
     search_backend = build_search_backend(config.search_backend, source_policy=source_policy)
     for _ in range(config.iterations):
         result = run_iteration(

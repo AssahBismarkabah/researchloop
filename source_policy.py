@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -28,6 +29,8 @@ class SourcePolicy:
     version: int = 1
     search_depth: str = "advanced"
     time_range: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     extract_after_search: bool = True
     extract_depth: str = "basic"
     extract_format: str = "markdown"
@@ -65,6 +68,10 @@ class SourcePolicy:
             raise ValueError(
                 f"source policy time_range must be one of {sorted(VALID_TIME_RANGES)}, got {self.time_range!r}"
             )
+        self.start_date = _clean_date(self.start_date, "start_date")
+        self.end_date = _clean_date(self.end_date, "end_date")
+        if self.start_date and self.end_date and self.start_date >= self.end_date:
+            raise ValueError("source policy start_date must be before end_date")
         self.extract_after_search = _as_bool(self.extract_after_search)
         self.extract_depth = str(self.extract_depth).strip().lower()
         if self.extract_depth not in VALID_SEARCH_DEPTHS:
@@ -91,6 +98,8 @@ class SourcePolicy:
             version=int(data.get("version") or 1),
             search_depth=str(data.get("search_depth") or "advanced"),
             time_range=data.get("time_range"),
+            start_date=data.get("start_date"),
+            end_date=data.get("end_date"),
             extract_after_search=data.get("extract_after_search", True),
             extract_depth=str(data.get("extract_depth") or "basic"),
             extract_format=str(data.get("extract_format") or "markdown"),
@@ -105,6 +114,8 @@ class SourcePolicy:
             "version": self.version,
             "search_depth": self.search_depth,
             "time_range": self.time_range,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
             "extract_after_search": self.extract_after_search,
             "extract_depth": self.extract_depth,
             "extract_format": self.extract_format,
@@ -159,6 +170,141 @@ def write_source_policy(path: Path, policy: SourcePolicy) -> None:
     path.write_text(json.dumps(policy.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def policy_for_question(
+    policy: SourcePolicy,
+    question: str,
+    today: date | None = None,
+) -> SourcePolicy:
+    if policy.start_date or policy.end_date or policy.time_range:
+        return policy
+    text = question.lower()
+    anchor = today or date.today()
+    explicit_date = _extract_explicit_date(text)
+    if explicit_date is not None:
+        day = explicit_date.isoformat()
+        return _copy_policy(
+            policy,
+            start_date=day,
+            end_date=_next_day_iso(explicit_date),
+            notes=policy.notes
+            + [
+                f"Explicit topic date detected; search is constrained to {day}.",
+            ],
+        )
+    if _has_strict_today_window(text):
+        return _copy_policy(
+            policy,
+            start_date=anchor.isoformat(),
+            end_date=_next_day_iso(anchor),
+            notes=policy.notes
+            + [
+                "Date-sensitive topic detected; search is constrained to the current date.",
+            ],
+        )
+    if _has_last_24_hour_window(text):
+        return _copy_policy(
+            policy,
+            time_range="day",
+            notes=policy.notes
+            + [
+                "Last-24-hours topic detected; search uses Tavily time_range=day.",
+            ],
+        )
+    if _has_recent_window(text):
+        return _copy_policy(
+            policy,
+            time_range="day",
+            notes=policy.notes
+            + [
+                "Recent/current topic detected; search uses Tavily time_range=day.",
+            ],
+        )
+    return policy
+
+
+def _copy_policy(policy: SourcePolicy, **overrides: Any) -> SourcePolicy:
+    data = policy.to_dict()
+    data.update(overrides)
+    return SourcePolicy.from_dict(data)
+
+
+def _next_day_iso(day: date) -> str:
+    return (day + timedelta(days=1)).isoformat()
+
+
+def _has_strict_today_window(text: str) -> bool:
+    patterns = [
+        "today",
+        "daily briefing",
+        "daily tech briefing",
+        "last 12 hours",
+        "past 12 hours",
+    ]
+    return any(pattern in text for pattern in patterns)
+
+
+def _has_last_24_hour_window(text: str) -> bool:
+    return any(pattern in text for pattern in ["last 24 hours", "past 24 hours", "older than 24 hours"])
+
+
+def _has_recent_window(text: str) -> bool:
+    patterns = [
+        "latest",
+        "current",
+        "recent",
+        "this week",
+    ]
+    return any(pattern in text for pattern in patterns)
+
+
+def _extract_explicit_date(text: str) -> date | None:
+    import re
+
+    iso_match = re.search(r"\b(20\d{2})-(\d{2})-(\d{2})\b", text)
+    if iso_match:
+        try:
+            return date.fromisoformat(iso_match.group(0))
+        except ValueError:
+            return None
+
+    month_names = (
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    )
+    month_re = "|".join(month_names)
+    patterns = [
+        rf"\b(\d{{1,2}})\s+({month_re})\s+(20\d{{2}})\b",
+        rf"\b({month_re})\s+(\d{{1,2}}),?\s+(20\d{{2}})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        try:
+            if match.group(1).isdigit():
+                day = int(match.group(1))
+                month = month_names.index(match.group(2)) + 1
+                year = int(match.group(3))
+            else:
+                month = month_names.index(match.group(1)) + 1
+                day = int(match.group(2))
+                year = int(match.group(3))
+            return date(year, month, day)
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -180,6 +326,18 @@ def _as_bool(value: Any) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return bool(value)
+
+
+def _clean_date(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"source policy {field_name} must use YYYY-MM-DD, got {text!r}") from exc
 
 
 def _clean_domains(values: list[Any]) -> list[str]:

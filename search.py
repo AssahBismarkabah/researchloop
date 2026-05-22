@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from datetime import date, datetime, timedelta
 
 from models import Source
 from retry import call_with_retries
@@ -60,12 +62,19 @@ class TavilySearch(SearchBackend):
             body["include_domains"] = self.source_policy.include_domains
         if self.source_policy.exclude_domains:
             body["exclude_domains"] = self.source_policy.exclude_domains
-        if self.source_policy.time_range:
+        if self.source_policy.start_date:
+            body["start_date"] = self.source_policy.start_date
+        if self.source_policy.end_date:
+            body["end_date"] = self.source_policy.end_date
+        if self.source_policy.time_range and not (self.source_policy.start_date or self.source_policy.end_date):
             body["time_range"] = self.source_policy.time_range
         payload = self._post_json("/search", body)
 
         sources = []
         for result in payload.get("results") or []:
+            result_date = _result_date(result)
+            if not self._result_date_allowed(result_date):
+                continue
             url = str(result.get("url") or "")
             if not self.source_policy.allows_url(url):
                 continue
@@ -81,7 +90,12 @@ class TavilySearch(SearchBackend):
                     query=query,
                     metadata={
                         "score": result.get("score"),
+                        "published_date": result.get("published_date"),
+                        "result_date": result_date.isoformat() if result_date else None,
                         "source_policy_version": self.source_policy.version,
+                        "source_policy_time_range": self.source_policy.time_range,
+                        "source_policy_start_date": self.source_policy.start_date,
+                        "source_policy_end_date": self.source_policy.end_date,
                     },
                 )
             )
@@ -117,6 +131,21 @@ class TavilySearch(SearchBackend):
                     source.metadata["extract_format"] = self.source_policy.extract_format
                 elif source.url in failed_urls:
                     source.metadata["extract_failed"] = True
+
+    def _result_date_allowed(self, result_date: date | None) -> bool:
+        if result_date is None:
+            return True
+        start = _parse_result_date(self.source_policy.start_date)
+        end = _parse_result_date(self.source_policy.end_date)
+        if start and result_date < start:
+            return False
+        if end and result_date >= end:
+            return False
+        if not (start or end):
+            floor = _time_range_floor(self.source_policy.time_range)
+            if floor and result_date < floor:
+                return False
+        return True
 
     def _post_json(self, path: str, body: dict[str, object]) -> dict[str, object]:
         def once() -> dict[str, object]:
@@ -154,3 +183,68 @@ def build_search_backend(name: str, source_policy: SourcePolicy | None = None) -
 
 def _chunks(values: list[Source], size: int) -> list[list[Source]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _result_date(result: object) -> date | None:
+    if not isinstance(result, dict):
+        return None
+    published = _parse_result_date(result.get("published_date"))
+    if published is not None:
+        return published
+    for field in ("url", "title"):
+        inferred = _find_date_in_text(result.get(field))
+        if inferred is not None:
+            return inferred
+    return None
+
+
+def _parse_result_date(value: object) -> date | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        pass
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _find_date_in_text(value: object) -> date | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for pattern in (
+        r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b",
+        r"\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b",
+    ):
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        try:
+            if len(match.group(1)) == 4:
+                return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            return date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+        except ValueError:
+            continue
+    return _parse_result_date(text)
+
+
+def _time_range_floor(time_range: str | None) -> date | None:
+    if time_range == "day":
+        return date.today() - timedelta(days=1)
+    if time_range == "week":
+        return date.today() - timedelta(days=7)
+    if time_range == "month":
+        return date.today() - timedelta(days=31)
+    if time_range == "year":
+        return date.today() - timedelta(days=366)
+    return None

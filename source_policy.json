@@ -27,6 +27,8 @@
     "direct product documentation"
   ],
   "search_depth": "advanced",
+  "start_date": null,
+  "end_date": null,
   "time_range": null,
   "version": 1
 }

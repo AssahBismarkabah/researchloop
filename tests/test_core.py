@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from core import add_manual_source, init_workspace, run_iteration
@@ -11,7 +12,7 @@ from models import Claim, ResearchResult, Source
 from run_config import RunConfig, load_run_config_for_workspace, write_run_config
 from scoring import evaluate_report
 from search import NoSearch, SearchBackend, TavilySearch
-from source_policy import SourcePolicy, load_policy_for_workspace
+from source_policy import SourcePolicy, load_policy_for_workspace, policy_for_question
 from storage import load_claims, load_sources, read_text
 
 
@@ -136,11 +137,40 @@ class CoreTests(unittest.TestCase):
             policy = json.loads((workspace / "source_policy.json").read_text(encoding="utf-8"))
 
             self.assertEqual(policy["time_range"], "day")
+            self.assertIsNone(policy["start_date"])
+            self.assertIsNone(policy["end_date"])
             self.assertTrue(policy["extract_after_search"])
             self.assertEqual(policy["extract_depth"], "basic")
             self.assertEqual(policy["include_domains"], ["example.com", "docs.example.com"])
             self.assertEqual(policy["exclude_domains"], ["forum.example.com"])
             self.assertIn("source_policy.json", read_text(workspace / "topic.md"))
+
+    def test_init_applies_today_date_policy_from_question(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(
+                Path(tmp),
+                "daily date policy",
+                "Generate a daily tech briefing for today and only include the last 12 hours.",
+            )
+
+            policy = json.loads((workspace / "source_policy.json").read_text(encoding="utf-8"))
+
+            self.assertIsNotNone(policy["start_date"])
+            self.assertEqual(
+                date.fromisoformat(policy["end_date"]),
+                date.fromisoformat(policy["start_date"]) + timedelta(days=1),
+            )
+            self.assertIn("Date-sensitive topic detected", "\n".join(policy["notes"]))
+
+    def test_policy_for_question_applies_explicit_date_constraint(self) -> None:
+        policy = policy_for_question(
+            SourcePolicy(),
+            "Run latest news as of 21 May 2026.",
+        )
+
+        self.assertEqual(policy.start_date, "2026-05-21")
+        self.assertEqual(policy.end_date, "2026-05-22")
+        self.assertIsNone(policy.time_range)
 
     def test_init_writes_reviewable_run_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,12 +235,28 @@ class CoreTests(unittest.TestCase):
 
         def fake_post(path: str, body: dict[str, object]) -> dict[str, object]:
             if path == "/search":
+                self.assertEqual(body["start_date"], "2026-05-22")
+                self.assertEqual(body["end_date"], "2026-05-23")
                 return {
                     "results": [
+                        {
+                            "title": "Stale result",
+                            "url": "https://example.com/stale",
+                            "content": "old",
+                            "published_date": "2026-05-20",
+                            "score": 0.7,
+                        },
+                        {
+                            "title": "Old URL result",
+                            "url": "https://example.com/2024/05/20/old",
+                            "content": "old url",
+                            "score": 0.6,
+                        },
                         {
                             "title": "Short result",
                             "url": "https://example.com/article",
                             "content": "short",
+                            "published_date": "2026-05-22",
                             "score": 0.9,
                         }
                     ]
@@ -229,10 +275,14 @@ class CoreTests(unittest.TestCase):
             raise AssertionError(f"unexpected path: {path}")
 
         search._post_json = fake_post  # type: ignore[method-assign]
+        search.source_policy = SourcePolicy(start_date="2026-05-22", end_date="2026-05-23")
 
         sources = search.search("test query", max_results=1)
 
+        self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].content, "long extracted markdown content")
+        self.assertEqual(sources[0].metadata["source_policy_start_date"], "2026-05-22")
+        self.assertEqual(sources[0].metadata["result_date"], "2026-05-22")
         self.assertTrue(sources[0].metadata["extract_attempted"])
         self.assertTrue(sources[0].metadata["extracted"])
 

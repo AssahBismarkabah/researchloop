@@ -175,6 +175,8 @@ copies that policy into every workspace so runs remain auditable.
 ```json
 {
   "search_depth": "advanced",
+  "start_date": null,
+  "end_date": null,
   "time_range": null,
   "extract_after_search": true,
   "extract_depth": "basic",
@@ -249,6 +251,8 @@ python -m researchloop run workspaces/software-news
 
 - Source quality is better with extraction, but social feeds and front pages can
   still return truncated or noisy records without a browser or official API.
+- Date filters depend on provider publish/update metadata. Pages without usable
+  date metadata can still need human review.
 - The verifier checks citation discipline, structure, and lightweight textual
   support, not factual truth.
 - Transient provider failures are retried, but there is no budget policy,
