@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import traceback
 import uuid
@@ -87,6 +88,26 @@ class ResearchUI:
     def get_research(self, workspace_name: str) -> dict[str, Any]:
         workspace = workspace_path_from_name(self.root, workspace_name)
         return workspace_result_payload(workspace)
+
+    def delete_research(self, workspace_name: str) -> dict[str, str]:
+        workspace = workspace_path_from_name(self.root, workspace_name)
+        with self._lock:
+            active_job = next(
+                (
+                    job
+                    for job in self.jobs.values()
+                    if job.workspace_name == workspace.name and job.status in {"queued", "running"}
+                ),
+                None,
+            )
+            if active_job is not None:
+                raise RuntimeError("Research is still running.")
+        shutil.rmtree(workspace)
+        with self._lock:
+            for job_id, job in list(self.jobs.items()):
+                if job.workspace_name == workspace.name:
+                    del self.jobs[job_id]
+        return {"deleted": workspace.name}
 
     def _set_job(self, job_id: str, **updates: Any) -> ResearchJob:
         with self._lock:
@@ -226,6 +247,7 @@ def workspace_result_payload(workspace: Path, latest_result: dict[str, object] |
     report = read_text(workspace / "report.md")
     eval_text = read_text(workspace / "eval.md")
     return {
+        "workspace_name": workspace.name,
         "workspace": str(workspace),
         "report": report,
         "score": float(state.get("best_score") or 0.0),
@@ -323,6 +345,21 @@ def make_handler(app: ResearchUI) -> type[BaseHTTPRequestHandler]:
                 self._send_json({"error": str(exc)}, status=400)
                 return
             self._send_json(job.to_dict(), status=202)
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            if not parsed.path.startswith("/api/researches/"):
+                self._send_json({"error": "Not found."}, status=404)
+                return
+            workspace_name = unquote(parsed.path.removeprefix("/api/researches/").strip("/"))
+            try:
+                self._send_json(app.delete_research(workspace_name))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            except FileNotFoundError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=409)
 
         def log_message(self, format: str, *args: Any) -> None:
             return
@@ -861,20 +898,51 @@ INDEX_HTML = """<!doctype html>
     .research-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0;
+      align-items: center;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .research-row:hover {
+      border-color: #0a0a0a;
+    }
+
+    .research-open {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
       align-items: center;
       width: 100%;
       min-height: auto;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface);
+      border: 0;
+      border-radius: 0;
+      background: transparent;
       color: var(--text);
       padding: 12px;
       text-align: left;
     }
 
-    .research-row:hover {
-      border-color: #0a0a0a;
+    .research-open:hover {
+      background: var(--muted-surface);
+    }
+
+    .research-delete {
+      align-self: stretch;
+      min-height: auto;
+      border-left: 1px solid var(--border);
+      border-radius: 0;
+      background: var(--surface);
+      color: var(--danger);
+      padding: 0 14px;
+      font-size: 12px;
+    }
+
+    .research-delete:hover {
+      background: #fff7f7;
     }
 
     .research-title {
@@ -939,6 +1007,17 @@ INDEX_HTML = """<!doctype html>
 
       .research-row {
         grid-template-columns: 1fr;
+        gap: 0;
+      }
+
+      .research-open {
+        grid-template-columns: 1fr;
+      }
+
+      .research-delete {
+        min-height: 36px;
+        border-left: 0;
+        border-top: 1px solid var(--border);
       }
 
       .source {
@@ -1040,6 +1119,7 @@ INDEX_HTML = """<!doctype html>
     const refreshResearches = document.getElementById("refreshResearches");
     let pollTimer = null;
     let activeJobId = null;
+    let currentResearchName = "";
     let statusMode = "idle";
 
     tabs.forEach((tab) => {
@@ -1150,6 +1230,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderResult(data) {
+      currentResearchName = data.workspace_name || "";
       result.classList.add("is-visible");
       result.classList.remove("is-collapsed");
       toggleResult.textContent = "Hide report";
@@ -1220,8 +1301,10 @@ INDEX_HTML = """<!doctype html>
       }
       items.forEach((research) => {
         const item = document.createElement("li");
+        const row = document.createElement("div");
+        row.className = "research-row";
         const button = document.createElement("button");
-        button.className = "research-row";
+        button.className = "research-open";
         button.type = "button";
         button.addEventListener("click", () => openResearch(research.name));
         const body = document.createElement("div");
@@ -1236,7 +1319,14 @@ INDEX_HTML = """<!doctype html>
         updated.className = "hint";
         updated.textContent = shortDate(research.updated_at);
         button.append(body, updated);
-        item.append(button);
+        const deleteButton = document.createElement("button");
+        deleteButton.className = "research-delete";
+        deleteButton.type = "button";
+        deleteButton.textContent = "Delete";
+        deleteButton.disabled = ["queued", "running"].includes(research.status);
+        deleteButton.addEventListener("click", () => deleteResearch(research));
+        row.append(button, deleteButton);
+        item.append(row);
         researchesList.append(item);
       });
     }
@@ -1285,6 +1375,29 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function deleteResearch(research) {
+      const label = research.question || research.name;
+      const confirmed = window.confirm(`Delete "${label}"? This removes the local workspace files.`);
+      if (!confirmed) return;
+      try {
+        const response = await fetch(`/api/researches/${encodeURIComponent(research.name)}`, {
+          method: "DELETE"
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Could not delete research.");
+        }
+        if (currentResearchName === research.name) {
+          hideResult();
+        }
+        statusMode = "idle";
+        setStatus("Connected locally", "connected");
+        loadResearches();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
     function setActiveView(viewId, refresh = true) {
       tabs.forEach((tab) => {
         tab.classList.toggle("is-active", tab.dataset.view === viewId);
@@ -1312,6 +1425,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function hideResult() {
+      currentResearchName = "";
       result.classList.remove("is-visible");
       result.classList.remove("is-collapsed");
       toggleResult.textContent = "Hide report";

@@ -78,6 +78,31 @@ class UITests(unittest.TestCase):
             self.assertEqual(researches[0]["status"], "queued")
             self.assertEqual(researches[0]["question"], "What is queued?")
 
+    def test_delete_research_removes_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = ResearchUI(root=root)
+            workspace = init_workspace(root, "old research", "What can be removed?")
+
+            result = app.delete_research(workspace.name)
+
+            self.assertEqual(result["deleted"], workspace.name)
+            self.assertFalse(workspace.exists())
+            self.assertEqual(app.list_researches(), [])
+
+    def test_delete_research_rejects_running_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = ResearchUI(root=root)
+            job = app.create_job("What is still running?", start=False)
+            job.status = "running"
+            workspace = init_workspace(root, job.workspace_name, job.question)
+
+            with self.assertRaises(RuntimeError):
+                app.delete_research(workspace.name)
+
+            self.assertTrue(workspace.exists())
+
     def test_workspace_result_payload_returns_report_quality_and_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = init_workspace(Path(tmp), "ui payload", "What should be shown?")
@@ -93,6 +118,7 @@ class UITests(unittest.TestCase):
 
             payload = workspace_result_payload(workspace)
 
+            self.assertEqual(payload["workspace_name"], workspace.name)
             self.assertEqual(payload["score"], 88.0)
             self.assertEqual(payload["best_iteration"], "iter-1")
             self.assertIn("Answer [S1]", payload["report"])
@@ -104,6 +130,11 @@ class UITests(unittest.TestCase):
         self.assertIn("citation-link", INDEX_HTML)
         self.assertIn('href="#source-${sourceId}"', INDEX_HTML)
         self.assertIn("item.id = `source-${source.id}`", INDEX_HTML)
+
+    def test_ui_has_research_delete_action(self) -> None:
+        self.assertIn('method: "DELETE"', INDEX_HTML)
+        self.assertIn("research-delete", INDEX_HTML)
+        self.assertIn("window.confirm", INDEX_HTML)
 
 
 if __name__ == "__main__":
