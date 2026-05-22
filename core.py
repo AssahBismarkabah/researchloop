@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from llm import ResearchLLM
 from models import Claim, Evaluation, Source
@@ -25,6 +26,9 @@ from storage import (
     write_jsonl,
     write_text,
 )
+
+
+ProgressCallback = Callable[[str, str, dict[str, object]], None]
 
 
 def init_workspace(
@@ -100,12 +104,14 @@ def run_iteration(
     search_backend: SearchBackend,
     max_results: int = 5,
     min_delta: float = 0.1,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, object]:
     timestamp = utc_now()
     iteration_id = _next_iteration_id(workspace)
     iteration_dir = workspace / "iterations" / iteration_id
     iteration_dir.mkdir(parents=True, exist_ok=False)
 
+    _emit_progress(progress, "workspace", "Preparing iteration", f"Iteration {iteration_id}")
     topic = read_text(workspace / "topic.md")
     previous_report = read_text(workspace / "report.md")
     previous_claims = load_claims(workspace)
@@ -113,8 +119,21 @@ def run_iteration(
     previous_eval = read_json(workspace / "state.json", {"best_score": 0.0})
 
     gaps = _extract_prior_gaps(workspace)
-    queries = [] if search_backend.name == "none" else llm.plan_queries(topic, previous_report, gaps)
-    added_sources = _collect_sources(search_backend, sources, queries, max_results)
+    if search_backend.name == "none":
+        queries = []
+        _emit_progress(progress, "search", "Using saved sources", f"{len(sources)} sources available", source_count=len(sources))
+    else:
+        _emit_progress(
+            progress,
+            "planning",
+            "Planning search queries",
+            f"{len(sources)} saved sources; {len(gaps)} prior gaps",
+            source_count=len(sources),
+            gap_count=len(gaps),
+        )
+        queries = llm.plan_queries(topic, previous_report, gaps)
+        _emit_progress(progress, "planning", "Search plan ready", f"{len(queries)} queries", query_count=len(queries))
+    added_sources = _collect_sources(search_backend, sources, queries, max_results, progress=progress)
     if added_sources:
         sources.extend(added_sources)
         save_sources(workspace, sources)
@@ -122,8 +141,16 @@ def run_iteration(
     write_jsonl(iteration_dir / "added_sources.jsonl", [source.to_dict() for source in added_sources])
 
     try:
+        _emit_progress(
+            progress,
+            "synthesis",
+            "Writing candidate report",
+            f"{len(sources)} sources available",
+            source_count=len(sources),
+        )
         candidate = llm.synthesize(topic, sources, previous_report, previous_claims)
     except Exception as exc:
+        _emit_progress(progress, "error", "Synthesis failed", str(exc), state="error", source_count=len(sources))
         write_json(
             iteration_dir / "error.json",
             {
@@ -148,11 +175,26 @@ def run_iteration(
             description=f"synthesis failed: {exc}",
         )
         raise
+    _emit_progress(
+        progress,
+        "evaluation",
+        "Checking citations and score",
+        f"{len(candidate.claims)} claims returned",
+        claim_count=len(candidate.claims),
+    )
     evaluation = evaluate_report(candidate.report_markdown, candidate.claims, sources, candidate.gaps)
     best_score = float(previous_eval.get("best_score") or 0.0)
     has_report = bool(candidate.report_markdown.strip())
     keep = has_report and evaluation.score > 0 and (best_score == 0.0 or evaluation.score >= best_score + min_delta)
     status = "keep" if keep else "discard"
+    _emit_progress(
+        progress,
+        "saving",
+        "Saving result",
+        f"{status} candidate with score {evaluation.score:.2f}",
+        score=evaluation.score,
+        decision=status,
+    )
 
     write_text(iteration_dir / "candidate_report.md", candidate.report_markdown + "\n")
     write_jsonl(iteration_dir / "candidate_claims.jsonl", [claim.to_dict() for claim in candidate.claims])
@@ -187,6 +229,17 @@ def run_iteration(
         description=candidate.summary or "research iteration",
     )
 
+    _emit_progress(
+        progress,
+        "done",
+        "Done",
+        f"{status} with score {evaluation.score:.2f}",
+        state="done",
+        score=evaluation.score,
+        decision=status,
+        source_count=evaluation.source_count,
+        claim_count=evaluation.claim_count,
+    )
     return {
         "iteration": iteration_id,
         "status": status,
@@ -212,13 +265,25 @@ def _collect_sources(
     existing_sources: list[Source],
     queries: list[str],
     max_results: int,
+    progress: ProgressCallback | None = None,
 ) -> list[Source]:
     if search_backend.name == "none":
         return []
     seen_urls = {source.url for source in existing_sources if source.url}
     collected: list[Source] = []
     sources_so_far = list(existing_sources)
-    for query in queries:
+    total_queries = len(queries)
+    for index, query in enumerate(queries, start=1):
+        _emit_progress(
+            progress,
+            "search",
+            f"Searching sources {index} of {total_queries}",
+            query,
+            query_index=index,
+            query_count=total_queries,
+            source_count=len(sources_so_far) + len(collected),
+        )
+        before_count = len(collected)
         for candidate in search_backend.search(query, max_results=max_results):
             if candidate.url and candidate.url in seen_urls:
                 continue
@@ -226,7 +291,32 @@ def _collect_sources(
             collected.append(candidate)
             if candidate.url:
                 seen_urls.add(candidate.url)
+        added_count = len(collected) - before_count
+        _emit_progress(
+            progress,
+            "search",
+            f"Collected {added_count} new sources",
+            query,
+            query_index=index,
+            query_count=total_queries,
+            source_count=len(sources_so_far) + len(collected),
+            added_sources=added_count,
+        )
     return collected
+
+
+def _emit_progress(
+    progress: ProgressCallback | None,
+    step: str,
+    title: str,
+    detail: str = "",
+    **metadata: object,
+) -> None:
+    if progress is None:
+        return
+    payload = dict(metadata)
+    payload["detail"] = detail
+    progress(step, title, payload)
 
 
 def _next_iteration_id(workspace: Path) -> str:

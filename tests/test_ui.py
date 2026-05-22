@@ -11,6 +11,8 @@ from ui import (
     ResearchUI,
     list_research_summaries,
     question_from_topic,
+    research_display_excerpt,
+    research_display_title,
     workspace_name_from_question,
     workspace_result_payload,
 )
@@ -35,6 +37,17 @@ class UITests(unittest.TestCase):
         self.assertEqual(job.status, "queued")
         self.assertEqual(app.get_job(job.id), job)
 
+    def test_job_events_are_returned_to_the_ui(self) -> None:
+        app = ResearchUI()
+        job = app.create_job("What changed in developer tools?", start=False)
+
+        app._add_job_event(job.id, "search", "Searching sources", {"detail": "Query 1", "source_count": 2})
+
+        payload = job.to_dict()
+        self.assertEqual(payload["events"][0]["title"], "Searching sources")
+        self.assertEqual(payload["events"][0]["detail"], "Query 1")
+        self.assertEqual(payload["events"][0]["metadata"]["source_count"], 2)
+
     def test_create_job_rejects_empty_question(self) -> None:
         app = ResearchUI()
 
@@ -47,6 +60,16 @@ class UITests(unittest.TestCase):
         )
 
         self.assertEqual(question, "What changed?")
+
+    def test_research_display_title_compacts_long_prompt(self) -> None:
+        question = (
+            "You are a leading technology analyst providing a daily, expert-level briefing "
+            "on the latest global developments across technology sectors. Please generate "
+            "a detailed report covering software, AI, cloud, and security."
+        )
+
+        self.assertEqual(research_display_title(question), "Daily technology briefing")
+        self.assertLessEqual(len(research_display_excerpt(question)), 220)
 
     def test_list_research_summaries_reads_existing_workspaces(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,6 +87,7 @@ class UITests(unittest.TestCase):
 
             self.assertEqual(summaries[0]["name"], "past-research")
             self.assertEqual(summaries[0]["question"], "What happened before?")
+            self.assertEqual(summaries[0]["title"], "What happened before?")
             self.assertEqual(summaries[0]["score"], 91.0)
             self.assertEqual(summaries[0]["source_count"], 1)
 
@@ -135,6 +159,16 @@ class UITests(unittest.TestCase):
         self.assertIn('method: "DELETE"', INDEX_HTML)
         self.assertIn("research-delete", INDEX_HTML)
         self.assertIn("window.confirm", INDEX_HTML)
+
+    def test_ui_clamps_research_prompt_preview(self) -> None:
+        self.assertIn("research-preview", INDEX_HTML)
+        self.assertIn("-webkit-line-clamp: 2", INDEX_HTML)
+        self.assertIn("compactTitle", INDEX_HTML)
+
+    def test_ui_has_activity_timeline(self) -> None:
+        self.assertIn("activityList", INDEX_HTML)
+        self.assertIn("renderActivity", INDEX_HTML)
+        self.assertIn("runMetrics", INDEX_HTML)
 
 
 if __name__ == "__main__":

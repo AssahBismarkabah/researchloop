@@ -112,14 +112,22 @@ class CoreTests(unittest.TestCase):
                 url="local://seed",
                 content="The seed source supports a grounded candidate report.",
             )
+            progress: list[tuple[str, str]] = []
 
-            result = run_iteration(workspace, FixedLLM(), NoSearch())
+            result = run_iteration(
+                workspace,
+                FixedLLM(),
+                NoSearch(),
+                progress=lambda step, title, metadata: progress.append((step, title)),
+            )
 
             self.assertEqual(result["status"], "keep")
             self.assertGreater(result["score"], 0)
             self.assertIn("[S1]", read_text(workspace / "report.md"))
             self.assertEqual(load_claims(workspace)[0].id, "C1")
             self.assertIn("keep", read_text(workspace / "results.tsv"))
+            self.assertIn(("synthesis", "Writing candidate report"), progress)
+            self.assertEqual(progress[-1][0], "done")
 
     def test_init_writes_reviewable_source_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

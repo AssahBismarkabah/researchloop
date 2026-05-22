@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 import traceback
@@ -37,6 +38,7 @@ class ResearchJob:
     workspace: str = ""
     result: dict[str, Any] | None = None
     error: str = ""
+    events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +52,7 @@ class ResearchJob:
             "workspace": self.workspace,
             "result": self.result,
             "error": self.error,
+            "events": self.events,
         }
 
 
@@ -117,12 +120,30 @@ class ResearchUI:
             job.updated_at = utc_now()
             return job
 
+    def _add_job_event(self, job_id: str, step: str, title: str, metadata: dict[str, object] | None = None) -> None:
+        with self._lock:
+            job = self.jobs[job_id]
+            event = {
+                "id": len(job.events) + 1,
+                "step": step,
+                "title": title,
+                "detail": str((metadata or {}).get("detail") or ""),
+                "state": str((metadata or {}).get("state") or "running"),
+                "created_at": utc_now(),
+                "metadata": {key: value for key, value in (metadata or {}).items() if key not in {"detail", "state"}},
+            }
+            job.events.append(event)
+            job.events = job.events[-40:]
+            job.stage = title
+            job.updated_at = event["created_at"]
+
     def _run_job(self, job_id: str) -> None:
         job = self.get_job(job_id)
         if job is None:
             return
         try:
             self._set_job(job_id, status="running", stage="Creating workspace")
+            self._add_job_event(job_id, "queued", "Starting research", {"detail": "Creating a local workspace."})
             workspace = init_workspace(
                 self.root,
                 job.workspace_name,
@@ -131,6 +152,7 @@ class ResearchUI:
                 run_config=load_default_run_config(),
             )
             self._set_job(job_id, workspace=str(workspace), stage="Researching")
+            self._add_job_event(job_id, "workspace", "Workspace ready", {"detail": str(workspace)})
 
             config = load_run_config_for_workspace(workspace)
             llm = build_llm(config.backend, model=config.model, synthesis_mode=config.synthesis_mode)
@@ -139,13 +161,19 @@ class ResearchUI:
 
             latest_result: dict[str, object] | None = None
             for index in range(config.iterations):
-                self._set_job(job_id, stage=f"Running iteration {index + 1} of {config.iterations}")
+                self._add_job_event(
+                    job_id,
+                    "iteration",
+                    f"Running iteration {index + 1} of {config.iterations}",
+                    {"detail": "Planning, collecting, writing, then checking the report."},
+                )
                 latest_result = run_iteration(
                     workspace=workspace,
                     llm=llm,
                     search_backend=search_backend,
                     max_results=config.max_results,
                     min_delta=config.min_delta,
+                    progress=lambda step, title, metadata: self._add_job_event(job_id, step, title, metadata),
                 )
 
             self._set_job(
@@ -154,7 +182,9 @@ class ResearchUI:
                 stage="Done",
                 result=workspace_result_payload(workspace, latest_result),
             )
+            self._add_job_event(job_id, "done", "Research complete", {"state": "done", "detail": "Report is ready."})
         except Exception as exc:
+            self._add_job_event(job_id, "error", "Research failed", {"state": "error", "detail": str(exc)})
             self._set_job(
                 job_id,
                 status="error",
@@ -181,6 +211,8 @@ def list_research_summaries(root: Path, jobs: list[ResearchJob] | None = None) -
             "name": job.workspace_name,
             "workspace": job.workspace or str(root / job.workspace_name),
             "question": job.question,
+            "title": research_display_title(job.question),
+            "excerpt": research_display_excerpt(job.question),
             "score": 0.0,
             "source_count": 0,
             "best_iteration": None,
@@ -203,10 +235,13 @@ def workspace_summary(workspace: Path) -> dict[str, Any]:
     sources = load_sources(workspace)
     last_result = _last_result_row(workspace)
     status = last_result.get("status") or ("done" if state.get("best_iteration") else "ready")
+    question = question_from_topic(read_text(workspace / "topic.md"))
     return {
         "name": workspace.name,
         "workspace": str(workspace),
-        "question": question_from_topic(read_text(workspace / "topic.md")),
+        "question": question,
+        "title": research_display_title(question),
+        "excerpt": research_display_excerpt(question),
         "status": status,
         "stage": status.title(),
         "score": float(state.get("best_score") or 0.0),
@@ -241,14 +276,42 @@ def question_from_topic(topic_markdown: str) -> str:
     return " ".join(lines).strip() or "Untitled research"
 
 
+def research_display_title(question: str) -> str:
+    text = _clean_prompt_text(question)
+    if not text:
+        return "Untitled research"
+    lower_text = text.lower()
+    if "daily" in lower_text and "technology" in lower_text and "briefing" in lower_text:
+        return "Daily technology briefing"
+    if "software" in lower_text and any(word in lower_text for word in ["news", "updates", "latest"]):
+        return "Software news research"
+    numbered = re.search(r"\b1\.\s+([A-Za-z][A-Za-z0-9 &/(),-]{12,90})", text)
+    if numbered:
+        return _truncate_text(numbered.group(1), 84)
+    stripped = re.sub(r"^you are [^.?!]{0,220}[.?!]\s*", "", text, flags=re.IGNORECASE)
+    stripped = re.sub(r"^please\s+(generate|create|write|produce)\s+", "", stripped, flags=re.IGNORECASE)
+    sentence = re.split(r"[.?!]\s+", stripped, maxsplit=1)[0]
+    return _truncate_text(sentence or text, 84)
+
+
+def research_display_excerpt(question: str) -> str:
+    text = _clean_prompt_text(question)
+    if not text:
+        return ""
+    return _truncate_text(text, 220)
+
+
 def workspace_result_payload(workspace: Path, latest_result: dict[str, object] | None = None) -> dict[str, Any]:
     state = read_json(workspace / "state.json", {"best_score": 0.0, "best_iteration": None})
     sources = load_sources(workspace)
     report = read_text(workspace / "report.md")
     eval_text = read_text(workspace / "eval.md")
+    question = question_from_topic(read_text(workspace / "topic.md"))
     return {
         "workspace_name": workspace.name,
         "workspace": str(workspace),
+        "title": research_display_title(question),
+        "excerpt": research_display_excerpt(question),
         "report": report,
         "score": float(state.get("best_score") or 0.0),
         "best_iteration": state.get("best_iteration"),
@@ -280,6 +343,19 @@ def _last_result_row(workspace: Path) -> dict[str, str]:
 
 def _mtime_utc(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _clean_prompt_text(value: str) -> str:
+    text = re.sub(r"[*_`>#]+", "", value)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = value.strip(" -:\n\t")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip(" ,;:-") + "..."
 
 
 def run_ui(host: str | None = None, port: int | None = None, root: Path | None = None) -> None:
@@ -616,27 +692,110 @@ INDEX_HTML = """<!doctype html>
       display: none;
     }
 
-    .steps {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .step {
+    .run-card {
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 10px;
-      min-height: 52px;
-      background: var(--muted-surface);
-      color: var(--muted);
-      font-size: 13px;
+      padding: 14px;
+      background: var(--surface);
     }
 
-    .step.is-active {
-      background: var(--surface);
+    .run-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .run-state {
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .run-state[data-state="running"] {
       color: var(--text);
       border-color: #0a0a0a;
+    }
+
+    .run-state[data-state="done"] {
+      color: var(--success);
+    }
+
+    .run-state[data-state="error"] {
+      color: var(--danger);
+    }
+
+    .run-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .activity {
+      display: grid;
+      gap: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .activity-item {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .activity-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .activity-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      margin-top: 6px;
+      background: var(--muted);
+    }
+
+    .activity-item[data-state="running"] .activity-dot {
+      background: #0a0a0a;
+    }
+
+    .activity-item[data-state="done"] .activity-dot {
+      background: var(--success);
+    }
+
+    .activity-item[data-state="error"] .activity-dot {
+      background: var(--danger);
+    }
+
+    .activity-title {
+      font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+
+    .activity-detail {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .activity-time {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
     }
 
     .meta {
@@ -948,6 +1107,18 @@ INDEX_HTML = """<!doctype html>
     .research-title {
       overflow-wrap: anywhere;
       font-weight: 500;
+      line-height: 1.3;
+    }
+
+    .research-preview {
+      display: -webkit-box;
+      margin-top: 4px;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
 
     .research-meta {
@@ -987,8 +1158,13 @@ INDEX_HTML = """<!doctype html>
         width: 100%;
       }
 
-      .steps {
-        grid-template-columns: 1fr;
+      .run-head {
+        flex-direction: column;
+      }
+
+      .run-state {
+        width: 100%;
+        text-align: center;
       }
 
       .actions {
@@ -1018,6 +1194,14 @@ INDEX_HTML = """<!doctype html>
         min-height: 36px;
         border-left: 0;
         border-top: 1px solid var(--border);
+      }
+
+      .activity-item {
+        grid-template-columns: 18px minmax(0, 1fr);
+      }
+
+      .activity-time {
+        grid-column: 2;
       }
 
       .source {
@@ -1055,13 +1239,16 @@ INDEX_HTML = """<!doctype html>
         </form>
 
         <section class="progress" id="progress">
-          <h1>Researching</h1>
-          <div class="hint" id="stageText">Queued</div>
-          <div class="steps">
-            <div class="step is-active" data-step="Creating workspace">Workspace</div>
-            <div class="step" data-step="Researching">Sources</div>
-            <div class="step" data-step="Running iteration">Report</div>
-            <div class="step" data-step="Done">Check</div>
+          <div class="run-card">
+            <div class="run-head">
+              <div>
+                <h1 id="progressTitle">Starting research</h1>
+                <div class="hint" id="stageText">Queued</div>
+              </div>
+              <div class="run-state" id="runState" data-state="running">Running</div>
+            </div>
+            <div class="run-metrics" id="runMetrics"></div>
+            <ol class="activity" id="activityList"></ol>
           </div>
         </section>
       </section>
@@ -1104,7 +1291,11 @@ INDEX_HTML = """<!doctype html>
     const progress = document.getElementById("progress");
     const result = document.getElementById("result");
     const errorBox = document.getElementById("errorBox");
+    const progressTitle = document.getElementById("progressTitle");
     const stageText = document.getElementById("stageText");
+    const runState = document.getElementById("runState");
+    const runMetrics = document.getElementById("runMetrics");
+    const activityList = document.getElementById("activityList");
     const topStatus = document.getElementById("topStatus");
     const workspaceHint = document.getElementById("workspaceHint");
     const metrics = document.getElementById("metrics");
@@ -1112,7 +1303,6 @@ INDEX_HTML = """<!doctype html>
     const sourcesList = document.getElementById("sourcesList");
     const evalText = document.getElementById("evalText");
     const toggleResult = document.getElementById("toggleResult");
-    const steps = Array.from(document.querySelectorAll(".step"));
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const views = Array.from(document.querySelectorAll(".view"));
     const researchesList = document.getElementById("researchesList");
@@ -1214,6 +1404,7 @@ INDEX_HTML = """<!doctype html>
       if (running) {
         statusMode = "running";
         setStatus("Running locally", "running");
+        updateProgress({ status: "queued", stage: "Queued", events: [] });
       } else if (statusMode === "running") {
         statusMode = "idle";
         checkConnection();
@@ -1221,12 +1412,84 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateProgress(job) {
-      stageText.textContent = job.stage || "Running";
+      const events = Array.isArray(job.events) ? job.events : [];
+      const latest = events.length ? events[events.length - 1] : null;
+      progressTitle.textContent = latest?.title || job.stage || "Running";
+      stageText.textContent = latest?.detail || job.stage || "Running";
+      runState.textContent = statusLabel(job.status);
+      runState.dataset.state = job.status === "error" ? "error" : job.status === "done" ? "done" : "running";
+      renderRunMetrics(events, job);
+      renderActivity(events, job.status);
       workspaceHint.textContent = job.workspace || job.workspace_name || "workspaces/";
-      steps.forEach((step) => {
-        const key = step.getAttribute("data-step");
-        step.classList.toggle("is-active", (job.stage || "").startsWith(key));
+    }
+
+    function renderRunMetrics(events, job) {
+      const latestMetadata = (events[events.length - 1] || {}).metadata || {};
+      const sourceCount = firstNumber(latestMetadata.source_count, job.result?.sources?.length);
+      const queryCount = firstNumber(latestMetadata.query_count);
+      const claimCount = firstNumber(latestMetadata.claim_count);
+      const score = firstNumber(latestMetadata.score);
+      runMetrics.innerHTML = "";
+      addRunMetric(`${events.length} updates`);
+      if (queryCount !== null) addRunMetric(`${queryCount} queries`);
+      if (sourceCount !== null) addRunMetric(`${sourceCount} sources`);
+      if (claimCount !== null) addRunMetric(`${claimCount} claims`);
+      if (score !== null) addRunMetric(`Score ${score.toFixed(2)}`);
+    }
+
+    function addRunMetric(text) {
+      const item = document.createElement("div");
+      item.className = "metric";
+      item.textContent = text;
+      runMetrics.append(item);
+    }
+
+    function renderActivity(events, status) {
+      activityList.innerHTML = "";
+      const visibleEvents = events.slice(-10);
+      if (!visibleEvents.length) {
+        visibleEvents.push({
+          title: "Queued",
+          detail: "Waiting for the local runner to start.",
+          state: status === "error" ? "error" : "running",
+          created_at: ""
+        });
+      }
+      visibleEvents.forEach((event) => {
+        const item = document.createElement("li");
+        item.className = "activity-item";
+        item.dataset.state = event.state || (status === "done" ? "done" : status === "error" ? "error" : "running");
+        const dot = document.createElement("div");
+        dot.className = "activity-dot";
+        const body = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "activity-title";
+        title.textContent = event.title || event.step || "Working";
+        const detail = document.createElement("div");
+        detail.className = "activity-detail";
+        detail.textContent = event.detail || "";
+        body.append(title, detail);
+        const time = document.createElement("div");
+        time.className = "activity-time";
+        time.textContent = shortTime(event.created_at);
+        item.append(dot, body, time);
+        activityList.append(item);
       });
+    }
+
+    function firstNumber(...values) {
+      for (const value of values) {
+        const number = Number(value);
+        if (Number.isFinite(number)) return number;
+      }
+      return null;
+    }
+
+    function statusLabel(status) {
+      if (status === "done") return "Done";
+      if (status === "error") return "Failed";
+      if (status === "queued") return "Queued";
+      return "Running";
     }
 
     function renderResult(data) {
@@ -1310,11 +1573,14 @@ INDEX_HTML = """<!doctype html>
         const body = document.createElement("div");
         const title = document.createElement("div");
         title.className = "research-title";
-        title.textContent = research.question || research.name;
+        title.textContent = research.title || compactTitle(research.question || research.name);
+        const preview = document.createElement("div");
+        preview.className = "research-preview";
+        preview.textContent = research.excerpt || compactExcerpt(research.question || "");
         const meta = document.createElement("div");
         meta.className = "research-meta";
         meta.textContent = `${research.status || "ready"} · score ${Number(research.score || 0).toFixed(2)} · ${research.source_count || 0} sources`;
-        body.append(title, meta);
+        body.append(title, preview, meta);
         const updated = document.createElement("div");
         updated.className = "hint";
         updated.textContent = shortDate(research.updated_at);
@@ -1376,7 +1642,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function deleteResearch(research) {
-      const label = research.question || research.name;
+      const label = research.title || compactTitle(research.question || research.name);
       const confirmed = window.confirm(`Delete "${label}"? This removes the local workspace files.`);
       if (!confirmed) return;
       try {
@@ -1649,6 +1915,36 @@ INDEX_HTML = """<!doctype html>
     function shortDate(value) {
       if (!value) return "";
       return String(value).replace("T", " ").replace("Z", "");
+    }
+
+    function compactTitle(value) {
+      const text = compactText(value);
+      if (!text) return "Untitled research";
+      if (text.toLowerCase().includes("daily") && text.toLowerCase().includes("technology") && text.toLowerCase().includes("briefing")) {
+        return "Daily technology briefing";
+      }
+      return truncateText(text, 84);
+    }
+
+    function compactExcerpt(value) {
+      return truncateText(compactText(value), 220);
+    }
+
+    function compactText(value) {
+      return String(value || "").replace(/[*_`>#]+/g, "").replace(/\\s+/g, " ").trim();
+    }
+
+    function truncateText(value, limit) {
+      const text = String(value || "").trim();
+      if (text.length <= limit) return text;
+      return `${text.slice(0, limit - 1).replace(/[ ,;:-]+$/g, "")}...`;
+    }
+
+    function shortTime(value) {
+      if (!value) return "";
+      const text = String(value);
+      const time = text.includes("T") ? text.split("T")[1] : text;
+      return time.replace("Z", "").slice(0, 8);
     }
 
     function setStatus(text, state) {

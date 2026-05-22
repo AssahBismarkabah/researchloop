@@ -54,8 +54,11 @@ python -m researchloop ui
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
-Use `New` to start research. Use `Researches` to reopen previous local
-workspaces. The UI creates normal directories under
+Use `New` to start research. The run panel shows a live activity feed for
+workspace setup, query planning, source collection, report writing, citation
+checking, and saving. Use `Researches` to reopen previous local workspaces or
+delete one after review. Deleting a research removes its local workspace
+directory. The UI creates normal directories under
 [`workspaces/`](workspaces/); it does not use a database or trap the result
 inside the browser.
 
@@ -257,6 +260,8 @@ python -m researchloop run workspaces/software-news
   support, not factual truth.
 - Transient provider failures are retried, but there is no budget policy,
   model-fallback policy, or job queue yet.
+- If a Markdown synthesis request times out, the runner retries once with a
+  smaller source pack before failing the iteration.
 - The UI is local-only. There is no hosted product, auth, or database.
 
 ## Notable Links

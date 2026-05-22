@@ -126,7 +126,28 @@ class OpenAICompatibleLLM(ResearchLLM):
         previous_report: str,
         previous_claims: list[Claim],
     ) -> ResearchResult:
-        report_markdown = self._complete_text(markdown_synthesis_prompt(topic, sources, previous_report, previous_claims))
+        try:
+            report_markdown = self._complete_text(
+                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims)
+            )
+        except LLMError as exc:
+            if not exc.retryable:
+                raise
+            report_markdown = self._complete_text(
+                markdown_synthesis_prompt(
+                    topic,
+                    sources,
+                    previous_report,
+                    previous_claims,
+                    source_limit=8,
+                    source_chars=120,
+                    topic_chars=1800,
+                    word_limit=700,
+                    compact=True,
+                ),
+                max_tokens=int(os.getenv("RESEARCH_COMPACT_TEXT_MAX_TOKENS", "1800")),
+                attempts=1,
+            )
         return ResearchResult(
             report_markdown=report_markdown.strip(),
             claims=_claims_from_report(report_markdown),
@@ -164,7 +185,7 @@ class OpenAICompatibleLLM(ResearchLLM):
                     raise LLMError("The LLM response contained malformed JSON.") from exc
             raise LLMError("The LLM response was not valid JSON.")
 
-    def _complete_text(self, user_prompt: str) -> str:
+    def _complete_text(self, user_prompt: str, max_tokens: int | None = None, attempts: int | None = None) -> str:
         body = {
             "model": self.model,
             "messages": [
@@ -172,12 +193,14 @@ class OpenAICompatibleLLM(ResearchLLM):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": int(os.getenv("RESEARCH_TEXT_MAX_TOKENS") or os.getenv("RESEARCH_MAX_TOKENS", "4000")),
+            "max_tokens": max_tokens
+            if max_tokens is not None
+            else int(os.getenv("RESEARCH_TEXT_MAX_TOKENS") or os.getenv("RESEARCH_MAX_TOKENS", "2800")),
         }
-        data = self._post("/chat/completions", body)
+        data = self._post("/chat/completions", body, attempts=attempts)
         return _extract_chat_content(data)
 
-    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _post(self, path: str, body: dict[str, Any], attempts: int | None = None) -> dict[str, Any]:
         def once() -> dict[str, Any]:
             request = urllib.request.Request(
                 f"{self.base_url}{path}",
@@ -200,7 +223,7 @@ class OpenAICompatibleLLM(ResearchLLM):
             except TimeoutError as exc:
                 raise LLMError(f"LLM endpoint timed out after {self.timeout} seconds.", retryable=True) from exc
 
-        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)))
+        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=attempts)
 
 
 def build_llm(name: str, model: str | None = None, synthesis_mode: str | None = None) -> ResearchLLM:
@@ -280,18 +303,28 @@ def markdown_synthesis_prompt(
     sources: list[Source],
     previous_report: str,
     previous_claims: list[Claim],
+    source_limit: int | None = None,
+    source_chars: int | None = None,
+    topic_chars: int | None = None,
+    word_limit: int = 900,
+    compact: bool = False,
 ) -> str:
     source_blocks = []
-    for source in sources[:25]:
+    max_sources = source_limit if source_limit is not None else int(os.getenv("RESEARCH_SYNTHESIS_SOURCE_LIMIT", "14"))
+    max_source_chars = source_chars if source_chars is not None else int(os.getenv("RESEARCH_SYNTHESIS_SOURCE_CHARS", "180"))
+    max_topic_chars = topic_chars if topic_chars is not None else int(os.getenv("RESEARCH_SYNTHESIS_TOPIC_CHARS", "3200"))
+    question = _limit_text(_extract_question(topic), max_topic_chars)
+    for source in sources[:max_sources]:
         content = source.content.strip().replace("\x00", "")
         source_blocks.append(
             f"[{source.id}] {source.title}\nURL: {source.url or 'n/a'}\n"
             f"Type: {source.source_type}\nRetrieved: {source.retrieved_at}\n"
-            f"Query: {source.query or 'n/a'}\nContent:\n{content[:220]}"
+            f"Query: {source.query or 'n/a'}\nContent:\n{_limit_text(content, max_source_chars)}"
         )
     source_text = "\n\n---\n\n".join(source_blocks) or "No sources supplied."
+    mode_note = "This is a compact retry after the provider timed out. " if compact else ""
     return f"""Research topic:
-{topic}
+{question}
 
 Previous report:
 {previous_report[:800] if previous_report else "No prior report."}
@@ -310,13 +343,14 @@ Write Markdown only. Use these exact sections:
 ## Sources
 
 Rules:
+- {mode_note}Prefer the strongest supported findings over exhaustive coverage.
 - Every substantive bullet or sentence must cite supplied source IDs like [S1].
 - Do not cite source IDs that were not supplied.
 - Do not use emoji or decorative symbols in headings.
 - Under ## Current Answer, preserve explicit formatting requirements from the
   research topic. If the topic asks for categories, Problems & Pain Points, or
   Investment Opportunities, include those subsections there.
-- Keep the report under 1200 words.
+- Keep the report under {word_limit} words.
 - Prefer synthesis over source-by-source summary.
 - Include 6-8 evidence bullets.
 """
@@ -363,6 +397,13 @@ def _gaps_from_report(markdown: str) -> list[str]:
 
 def _format_bullets(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items) or "- Not enough evidence yet."
+
+
+def _limit_text(value: str, limit: int) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n[truncated]"
 
 
 def _extract_question(topic: str) -> str:
