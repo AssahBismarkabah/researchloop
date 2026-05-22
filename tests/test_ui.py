@@ -7,6 +7,7 @@ from pathlib import Path
 from core import add_manual_source, init_workspace
 from storage import write_json, write_text
 from ui import (
+    INDEX_HTML,
     ResearchUI,
     list_research_summaries,
     question_from_topic,
@@ -97,6 +98,12 @@ class UITests(unittest.TestCase):
             self.assertIn("Answer [S1]", payload["report"])
             self.assertEqual(payload["sources"][0]["id"], "S1")
             self.assertEqual(payload["sources"][0]["content_length"], 32)
+
+    def test_ui_renderer_links_report_urls_and_source_citations(self) -> None:
+        self.assertIn("safeHref", INDEX_HTML)
+        self.assertIn("citation-link", INDEX_HTML)
+        self.assertIn('href="#source-${sourceId}"', INDEX_HTML)
+        self.assertIn("item.id = `source-${source.id}`", INDEX_HTML)
 
 
 if __name__ == "__main__":

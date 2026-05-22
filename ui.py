@@ -731,6 +731,24 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
     }
 
+    .report a,
+    .eval a {
+      color: var(--text);
+      text-decoration: underline;
+      text-decoration-color: var(--border);
+      text-underline-offset: 2px;
+    }
+
+    .report a:hover,
+    .eval a:hover {
+      text-decoration-color: var(--text);
+    }
+
+    .citation-link {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
     .report hr,
     .eval hr {
       border: 0;
@@ -786,6 +804,13 @@ INDEX_HTML = """<!doctype html>
     .source-link:hover {
       color: var(--text);
       text-decoration: underline;
+    }
+
+    .source:target {
+      border-radius: 8px;
+      outline: 1px solid #0a0a0a;
+      outline-offset: 2px;
+      background: var(--muted-surface);
     }
 
     details {
@@ -1140,6 +1165,7 @@ INDEX_HTML = """<!doctype html>
       (data.sources || []).forEach((source) => {
         const item = document.createElement("li");
         item.className = "source";
+        item.id = `source-${source.id}`;
         const id = document.createElement("div");
         id.className = "source-id";
         id.textContent = source.id;
@@ -1445,10 +1471,56 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderInline(value) {
-      return escapeHtml(value)
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
+      const placeholders = [];
+      const hold = (html) => {
+        const token = `@@INLINE_${placeholders.length}@@`;
+        placeholders.push(html);
+        return token;
+      };
+
+      let text = escapeHtml(value);
+      text = text.replace(/`([^`]+)`/g, (_match, code) => hold(`<code>${code}</code>`));
+      text = text.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, (match, label, url) => {
+        const href = safeHref(url);
+        if (!href) return match;
+        return hold(`<a href="${href}" target="_blank" rel="noreferrer">${label}</a>`);
+      });
+      text = text.replace(/(^|[\\s(])((?:https?:\\/\\/)[^\\s<]+)/g, (_match, prefix, rawUrl) => {
+        const split = splitTrailingPunctuation(rawUrl);
+        const href = safeHref(split.url);
+        if (!href) return `${prefix}${rawUrl}`;
+        return `${prefix}${hold(`<a href="${href}" target="_blank" rel="noreferrer">${split.url}</a>`)}${split.trailing}`;
+      });
+      text = text.replace(/\\[(S\\d+)\\]/g, (_match, sourceId) =>
+        hold(`<a class="citation-link" href="#source-${sourceId}">[${sourceId}]</a>`)
+      );
+      text = text
         .replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>")
         .replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
+
+      return text.replace(/@@INLINE_(\\d+)@@/g, (_match, index) => placeholders[Number(index)] || "");
+    }
+
+    function splitTrailingPunctuation(value) {
+      let url = String(value);
+      let trailing = "";
+      while (/[.,;:!?)\\]]$/.test(url)) {
+        trailing = url.slice(-1) + trailing;
+        url = url.slice(0, -1);
+      }
+      return { url, trailing };
+    }
+
+    function safeHref(value) {
+      const unescaped = String(value).replace(/&amp;/g, "&");
+      if (!/^https?:\\/\\//i.test(unescaped)) return "";
+      return escapeAttribute(unescaped);
+    }
+
+    function escapeAttribute(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;");
     }
 
     function escapeHtml(value) {
