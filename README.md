@@ -164,15 +164,15 @@ python -m researchloop run workspaces/software-news --search none
 - **Transparent verifier.** The score is a visible engineering signal for
   evidence quality, not a claim that the answer is true.
 
-## Status
+## Current Limits
 
-ResearchLoop has moved past the initial sketch into an early working tool.
-The core loop, OpenAI-compatible model calls, manual ingestion, Tavily search,
-source policy, run artifacts, scoring, and CLI tests are in place.
-
-It is still not a production research platform. The next maturity work is better
-source extraction, richer verifier checks, budget controls, provider retries,
-and stronger topic-specific source policy templates.
+- Source quality depends on the search backend; social feeds and front pages can
+  return truncated or noisy records.
+- The verifier checks citation discipline and structure, not factual truth.
+- Provider failures are surfaced clearly, but there is no retry/backoff policy
+  yet.
+- There is no Notion export path yet.
+- Daily briefing is still a prompt-driven workflow, not a first-class command.
 
 ## Notable Links
 
