@@ -1,19 +1,18 @@
 # ResearchLoop
 
-`ResearchLoop` is a local, file-based research runner. The goal is not to make
-another chat box that answers a question once. The goal is to make research run
-like a small, inspectable system.
+`ResearchLoop` is a local research app for source-backed reports. It starts a
+small browser UI on localhost, runs research on your machine, and writes every
+artifact to plain files.
 
 If you need a polished one-off report, use ChatGPT Deep Research, Perplexity,
 NotebookLM, Elicit, or whatever tool is best for that job. That is not the thing
 I am trying to replace here.
 
-What I want here is different: I want to give an agent a research question, a
-run config, a source policy, a model endpoint, and a workspace, then let it work
-through the topic while leaving the evidence behind. It should search, snapshot
-sources, write a candidate report, check whether the claims are cited, keep the
-report only if it improves the previous one, and leave me enough files to
-understand what happened.
+What I want here is different: I want to enter a research question, let the
+local runner work through the topic, and still own the evidence. It should
+search, snapshot sources, write a candidate report, check whether the claims are
+cited, keep the report only if it improves the previous one, and leave me enough
+files to understand what happened.
 
 If the answer is bad, I do not want to guess why. I want to see the sources, the
 claims, the prompt, the score, the gaps, and the discarded attempts.
@@ -44,12 +43,27 @@ If the output needs to become a daily briefing, a watchlist, a report archive, a
 Notion page, or an internal workflow, then I want the research process to be
 programmable and inspectable instead of hidden inside a chat session.
 
+## Use It
+
+Configure an OpenAI-compatible endpoint and Tavily in `.env`, then start the
+local UI:
+
+```bash
+python -m researchloop ui
+```
+
+Open `http://127.0.0.1:8787`.
+
+Use `New` to start research. Use `Researches` to reopen previous local
+workspaces. The UI creates normal directories under `workspaces/`; it does not
+use a database or trap the result inside the browser.
+
 ## How It Works
 
 The repo is intentionally small. A research topic becomes a directory of plain
-files. The human programs the topic, run config, and source policy. The agent
-produces source snapshots, candidate reports, claim records, evaluator notes,
-and an iteration log.
+files. The UI is a thin shell over the same runner. The workspace stores the
+topic, run config, source policy, source snapshots, candidate reports, claim
+records, evaluator notes, and iteration log.
 
 The important files are the interface:
 
@@ -118,7 +132,7 @@ This gives a repeatable signal for citation discipline and auditability. Human
 review is still required for legal, medical, financial, policy, security, or
 other high-stakes research.
 
-## Endpoint Model
+## Configuration
 
 The LLM adapter uses OpenAI-compatible chat completions, not OpenAI-specific
 Responses APIs.
@@ -183,30 +197,9 @@ sources. Use `exclude_domains` to remove low-signal domains. Use
 results are enriched through Tavily Extract so the stored source snapshots have
 cleaner page content than search snippets alone.
 
-## Run Research
-
-After installing the CLI and configuring an OpenAI-compatible endpoint, start a
-research topic with the question you want answered:
-
-```bash
-python -m researchloop init software-news \
-  "What are the most important software industry updates this month?"
-python -m researchloop run workspaces/software-news
-```
-
-For a local browser UI, run:
-
-```bash
-python -m researchloop ui
-```
-
-Then open `http://127.0.0.1:8787`. The UI creates normal workspaces under
-`workspaces/`; it does not use a database or hide artifacts behind the browser.
-Use `New` to start a run and `Researches` to reopen previous local workspaces.
-
-`init` copies `run_config.json` and `source_policy.json` into the workspace.
-That is intentional. I want the behavior of a research run to live with the
-research record, not in a long command that disappears from history.
+`run_config.json` controls how new workspaces run. That is intentional. I want
+the behavior of a research run to live with the research record, not in a long
+command that disappears from history.
 
 The checked-in default is source-backed web research:
 
@@ -225,14 +218,10 @@ The kept answer is written to `workspaces/software-news/report.md`. The same
 workspace also keeps `sources.jsonl`, `eval.md`, `results.tsv`, and every
 candidate iteration for audit.
 
-If you do not want web search, ingest trusted material first, set
-`"search_backend": "none"` in the workspace `run_config.json`, and run the
-workspace normally:
+The CLI still exists for agents and power users:
 
 ```bash
-python -m researchloop ingest workspaces/software-news \
-  --title "Internal notes" \
-  --text "Your source text here."
+python -m researchloop init software-news "What changed in software this week?"
 python -m researchloop run workspaces/software-news
 ```
 
@@ -242,9 +231,9 @@ python -m researchloop run workspaces/software-news
   diffable, commit-friendly, and easy to move.
 - **OpenAI-compatible endpoint.** The runner should work with any compatible
   `/chat/completions` provider, not a single vendor API.
-- **Workspace config over command flags.** The normal path is
-  `researchloop run <workspace>`. The run settings are plain files beside the
-  research artifacts.
+- **Workspace config over command flags.** The UI is the normal path. When the
+  CLI is used, run settings still come from plain files beside the research
+  artifacts.
 - **Local UI as a thin shell.** `researchloop ui` starts a small localhost app
   over the same runner. The browser is a control surface, not a second product
   path.
@@ -264,7 +253,7 @@ python -m researchloop run workspaces/software-news
   support, not factual truth.
 - Transient provider failures are retried, but there is no budget policy,
   model-fallback policy, or job queue yet.
-- Workflows are still prompt/file driven; there is no dedicated product UI.
+- The UI is local-only. There is no hosted product, auth, or database.
 
 ## Notable Links
 
