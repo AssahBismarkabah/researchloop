@@ -54,6 +54,7 @@ and an iteration log.
 The important files are the interface:
 
 ```text
+quality-bar.md        # target level, bench gate, and tool admission rules
 program.md            # operating instructions for bounded research runs
 run_config.json       # default run behavior copied into each workspace
 source_policy.json    # source-selection rules copied into each workspace
