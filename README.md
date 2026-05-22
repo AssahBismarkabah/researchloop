@@ -1,38 +1,62 @@
 # ResearchLoop
 
-`ResearchLoop` is a local, file-based research runner for auditable deep
-research. It runs a repeatable improve-or-discard loop where source-backed
-reports are treated as versioned research artifacts.
+`ResearchLoop` is a local, file-based research runner. The goal is not to make
+another chat box that answers a question once. The goal is to make research run
+like a small, inspectable system.
 
-The core idea is simple:
+If you need a polished one-off report, use ChatGPT Deep Research, Perplexity,
+NotebookLM, Elicit, or whatever tool is best for that job. That is not the thing
+I am trying to replace here.
+
+What I want here is different: I want to give an agent a research question, a
+source policy, a model endpoint, and a workspace, then let it work through the
+topic while leaving the evidence behind. It should search, snapshot sources,
+write a candidate report, check whether the claims are cited, keep the report
+only if it improves the previous one, and leave me enough files to understand
+what happened.
+
+If the answer is bad, I do not want to guess why. I want to see the sources, the
+claims, the prompt, the score, the gaps, and the discarded attempts.
+
+The core loop is deliberately simple:
 
 ```text
 plan queries -> collect source snapshots -> write candidate report
              -> verify claims and citations -> keep/discard -> repeat
 ```
 
-This is not a clone of ChatGPT Deep Research, Perplexity, Elicit, NotebookLM, or
-STORM. Those tools are already strong at producing reports. ResearchLoop focuses
-on the part that is usually hidden: durable run history, source snapshots,
-claim-level evidence, evaluator notes, and repeatable reruns.
+The point is to own the research operation: source policy, source snapshots,
+claim records, evaluator notes, iteration history, repeatable reruns, and
+publishing hooks for recurring workflows.
+
+## What This Is For
+
+This starts to matter when the same kind of research has to happen again and
+again, and the process matters as much as the final answer:
+
+- daily tech briefings;
+- security and vulnerability watchlists;
+- market or industry monitoring;
+- research over internal notes plus web sources;
+- reports that need an audit trail, not just a final paragraph.
+
+If the output needs to become a daily briefing, a watchlist, a report archive, a
+Notion page, or an internal workflow, then I want the research process to be
+programmable and inspectable instead of hidden inside a chat session.
 
 ## How It Works
 
-Each research topic gets a workspace. A run reads the topic, source policy,
-existing sources, previous claims, and current best report. The model plans
-search queries, optional Tavily search adds source snapshots, the model writes a
-candidate report with structured claims, and the verifier scores the candidate.
+The repo is intentionally small. A research topic becomes a directory of plain
+files. The human programs the topic and source policy. The agent produces source
+snapshots, candidate reports, claim records, evaluator notes, and an iteration
+log.
 
-If the candidate improves the current score by the configured delta, it becomes
-the kept report. Otherwise it is discarded, but its full artifacts remain under
-`iterations/` for inspection.
-
-The important files are:
+The important files are the interface:
 
 ```text
 program.md            # operating instructions for bounded research runs
-source_policy.json    # default source-selection policy copied into workspaces
-topic.md              # workspace question, source policy note, evaluation goal
+source_policy.json    # source-selection rules copied into each workspace
+topic.md              # the research question and constraints
 sources.jsonl         # source snapshots with stable IDs like S1
 claims.jsonl          # kept claim records with source IDs
 report.md             # current best report
@@ -42,10 +66,34 @@ state.json            # current best score and iteration
 iterations/           # candidate artifacts for every run
 ```
 
+By design, `report.md` is not overwritten just because the model wrote
+something new. A candidate has to beat the current score. If it loses, the
+candidate is discarded as the current report but preserved under `iterations/`
+so the failure can still be inspected.
+
+The metric is intentionally practical. It is not a truth oracle. It rewards
+cited claims, source coverage, expected structure, and visible open gaps. It
+penalizes unsupported claims and thin evidence. The metric exists so the loop has
+a repeatable signal, not so humans can stop reviewing the result.
+
+## Project Structure
+
+```text
+researchloop.py       # module entrypoint
+cli.py                # command-line interface
+core.py               # workspace lifecycle and keep/discard loop
+llm.py                # OpenAI-compatible chat-completions adapter
+search.py             # search backend adapter
+source_policy.py      # source policy loading and URL filtering
+scoring.py            # transparent verifier score
+prompts.py            # planning and synthesis prompts
+models.py             # source, claim, report, evaluation records
+storage.py            # plain-file persistence helpers
+```
+
 `program.md` is the human-facing operating document: it tells an agent how to
-run bounded research work. The source and report artifacts stay as normal files
-so humans can review, edit, diff, and rerun the process without trusting hidden
-state.
+run bounded research work. `source_policy.json` is where source rules live. The
+Python files are the runner; the workspace files are the research record.
 
 ## Verification
 
@@ -154,15 +202,17 @@ python -m researchloop run workspaces/software-news --search none
 
 ## Design Choices
 
-- **File-based state.** Workspaces are plain files, so every run can be
-  inspected, committed, archived, or diffed.
-- **OpenAI-compatible endpoint.** The model backend is not tied to OpenAI.
-- **Explicit source policy.** Search rules are reviewable config, not hidden
-  environment defaults.
-- **Keep/discard loop.** The runner keeps only candidate reports that improve
-  the current score, while preserving discarded iteration artifacts.
-- **Transparent verifier.** The score is a visible engineering signal for
-  evidence quality, not a claim that the answer is true.
+- **Plain files over hidden state.** Research artifacts should be readable,
+  diffable, commit-friendly, and easy to move.
+- **OpenAI-compatible endpoint.** The runner should work with any compatible
+  `/chat/completions` provider, not a single vendor API.
+- **Source policy is code-like config.** Search rules belong in
+  `source_policy.json`, not buried inside prompts or environment variables.
+- **Keep/discard is the control loop.** The current report changes only when a
+  candidate improves the score; bad runs remain inspectable.
+- **The verifier is humble.** It checks evidence hygiene. It does not certify
+  truth, investment advice, medical advice, legal advice, or anything else that
+  needs human judgment.
 
 ## Current Limits
 
