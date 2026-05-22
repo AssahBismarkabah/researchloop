@@ -542,6 +542,18 @@ INDEX_HTML = """<!doctype html>
       display: block;
     }
 
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .result.is-collapsed .result-body {
+      display: none;
+    }
+
     .steps {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -936,17 +948,22 @@ INDEX_HTML = """<!doctype html>
       <section class="error" id="errorBox"></section>
 
       <section class="result" id="result">
-        <h1>Report</h1>
-        <div class="meta" id="metrics"></div>
-        <article class="report" id="reportText"></article>
+        <div class="result-header">
+          <h1>Report</h1>
+          <button class="ghost-button" type="button" id="toggleResult">Hide report</button>
+        </div>
+        <div class="result-body">
+          <div class="meta" id="metrics"></div>
+          <article class="report" id="reportText"></article>
 
-        <h2>Sources Used</h2>
-        <ul class="sources" id="sourcesList"></ul>
+          <h2>Sources Used</h2>
+          <ul class="sources" id="sourcesList"></ul>
 
-        <details>
-          <summary>Inspect run</summary>
-          <article class="eval" id="evalText"></article>
-        </details>
+          <details>
+            <summary>Inspect run</summary>
+            <article class="eval" id="evalText"></article>
+          </details>
+        </div>
       </section>
     </main>
   </div>
@@ -965,6 +982,7 @@ INDEX_HTML = """<!doctype html>
     const reportText = document.getElementById("reportText");
     const sourcesList = document.getElementById("sourcesList");
     const evalText = document.getElementById("evalText");
+    const toggleResult = document.getElementById("toggleResult");
     const steps = Array.from(document.querySelectorAll(".step"));
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const views = Array.from(document.querySelectorAll(".view"));
@@ -979,6 +997,10 @@ INDEX_HTML = """<!doctype html>
     });
 
     refreshResearches.addEventListener("click", () => loadResearches());
+    toggleResult.addEventListener("click", () => {
+      const collapsed = result.classList.toggle("is-collapsed");
+      toggleResult.textContent = collapsed ? "Show report" : "Hide report";
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1047,6 +1069,8 @@ INDEX_HTML = """<!doctype html>
 
     function renderResult(data) {
       result.classList.add("is-visible");
+      result.classList.remove("is-collapsed");
+      toggleResult.textContent = "Hide report";
       topStatus.textContent = "Done";
       reportText.innerHTML = renderMarkdown(data.report || "");
       evalText.innerHTML = renderMarkdown(`Workspace: ${data.workspace}\\n\\n${data.eval || ""}`);
@@ -1168,6 +1192,8 @@ INDEX_HTML = """<!doctype html>
 
     function hideResult() {
       result.classList.remove("is-visible");
+      result.classList.remove("is-collapsed");
+      toggleResult.textContent = "Hide report";
       reportText.textContent = "";
       sourcesList.innerHTML = "";
       metrics.innerHTML = "";
