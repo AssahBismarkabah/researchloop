@@ -19,38 +19,35 @@ This file describes how to run a bounded autonomous research experiment.
    export RESEARCH_MODEL="your-model-name"
    ```
 
-4. Optional: configure search.
+4. Configure search if the workspace uses Tavily.
 
    ```bash
    export TAVILY_API_KEY="..."
    ```
 
-5. Review `source_policy.json`, then add any seed sources with
-   `python -m researchloop ingest`.
+5. Review the workspace `run_config.json` and `source_policy.json`, then add
+   any seed sources with `python -m researchloop ingest`.
 
 ## Research Loop
 
 Run one iteration:
 
 ```bash
-python -m researchloop run workspaces/<name> --search tavily --max-results 5
+python -m researchloop run workspaces/<name>
 ```
 
-If search is disabled, use:
-
-```bash
-python -m researchloop run workspaces/<name> --search none
-```
+If search should be disabled, set `"search_backend": "none"` in the workspace
+`run_config.json` before running.
 
 Each iteration:
 
-1. Reads `topic.md`, `source_policy.json`, `sources.jsonl`, `claims.jsonl`,
-   and `report.md`.
+1. Reads `topic.md`, `run_config.json`, `source_policy.json`, `sources.jsonl`,
+   `claims.jsonl`, and `report.md`.
 2. Asks the LLM for targeted search queries.
 3. Adds new source snapshots if search is enabled.
 4. Asks the LLM to write a candidate report and claim set.
 5. Scores the candidate.
-6. Keeps it if it improves the current score by `--min-delta`.
+6. Keeps it if it improves the current score by the configured `min_delta`.
 7. Logs the result to `results.tsv`.
 8. Stores all candidate artifacts under `iterations/`.
 
@@ -59,6 +56,7 @@ Each iteration:
 - Do not claim completeness when the source set is thin.
 - Every substantive report claim must cite source IDs like `[S1]`.
 - Prefer primary sources and official documentation over summaries.
+- Keep run behavior in `run_config.json`, not in ad hoc command flags.
 - Keep source-selection rules in `source_policy.json`, not in `.env`.
 - Keep source snapshots, even when an iteration is discarded.
 - Treat the score as a guide, not as truth.

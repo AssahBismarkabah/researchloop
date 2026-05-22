@@ -9,11 +9,11 @@ NotebookLM, Elicit, or whatever tool is best for that job. That is not the thing
 I am trying to replace here.
 
 What I want here is different: I want to give an agent a research question, a
-source policy, a model endpoint, and a workspace, then let it work through the
-topic while leaving the evidence behind. It should search, snapshot sources,
-write a candidate report, check whether the claims are cited, keep the report
-only if it improves the previous one, and leave me enough files to understand
-what happened.
+run config, a source policy, a model endpoint, and a workspace, then let it work
+through the topic while leaving the evidence behind. It should search, snapshot
+sources, write a candidate report, check whether the claims are cited, keep the
+report only if it improves the previous one, and leave me enough files to
+understand what happened.
 
 If the answer is bad, I do not want to guess why. I want to see the sources, the
 claims, the prompt, the score, the gaps, and the discarded attempts.
@@ -47,23 +47,26 @@ programmable and inspectable instead of hidden inside a chat session.
 ## How It Works
 
 The repo is intentionally small. A research topic becomes a directory of plain
-files. The human programs the topic and source policy. The agent produces source
-snapshots, candidate reports, claim records, evaluator notes, and an iteration
-log.
+files. The human programs the topic, run config, and source policy. The agent
+produces source snapshots, candidate reports, claim records, evaluator notes,
+and an iteration log.
 
 The important files are the interface:
 
 ```text
 program.md            # operating instructions for bounded research runs
+run_config.json       # default run behavior copied into each workspace
 source_policy.json    # source-selection rules copied into each workspace
-topic.md              # the research question and constraints
-sources.jsonl         # source snapshots with stable IDs like S1
-claims.jsonl          # kept claim records with source IDs
-report.md             # current best report
-eval.md               # verifier summary for the current best report
-results.tsv           # iteration log
-state.json            # current best score and iteration
-iterations/           # candidate artifacts for every run
+workspaces/<name>/topic.md          # the research question and constraints
+workspaces/<name>/run_config.json   # how this workspace runs
+workspaces/<name>/source_policy.json # source rules for this workspace
+workspaces/<name>/sources.jsonl     # source snapshots with stable IDs like S1
+workspaces/<name>/claims.jsonl      # kept claim records with source IDs
+workspaces/<name>/report.md         # current best report
+workspaces/<name>/eval.md           # verifier summary for the current best report
+workspaces/<name>/results.tsv       # iteration log
+workspaces/<name>/state.json        # current best score and iteration
+workspaces/<name>/iterations/       # candidate artifacts for every run
 ```
 
 By design, `report.md` is not overwritten just because the model wrote
@@ -84,6 +87,7 @@ cli.py                # command-line interface
 core.py               # workspace lifecycle and keep/discard loop
 llm.py                # OpenAI-compatible chat-completions adapter
 search.py             # search backend adapter
+run_config.py         # run configuration loading and validation
 source_policy.py      # source policy loading and URL filtering
 scoring.py            # transparent verifier score
 prompts.py            # planning and synthesis prompts
@@ -140,12 +144,15 @@ The request path is:
 POST {base_url}/chat/completions
 ```
 
-with `response_format: {"type": "json_object"}`.
+JSON synthesis uses `response_format: {"type": "json_object"}` when the
+endpoint supports it. The default run config uses Markdown synthesis because it
+works across more OpenAI-compatible endpoints.
 
 ## Search Policy
 
 Manual source ingestion works without a search API. Automated web search uses
-Tavily when `TAVILY_API_KEY` is set and `--search tavily` is passed.
+Tavily when `TAVILY_API_KEY` is set and the workspace `run_config.json` says
+`"search_backend": "tavily"`.
 
 Source-selection rules belong in `source_policy.json`, and `researchloop init`
 copies that policy into every workspace so runs remain auditable.
@@ -173,14 +180,7 @@ Use `include_domains` when a topic should be constrained to known primary
 sources. Use `exclude_domains` to remove low-signal domains. Use
 `"time_range": "day"` for current-day research. By default, Tavily search
 results are enriched through Tavily Extract so the stored source snapshots have
-cleaner page content than search snippets alone. A run can override the
-workspace policy explicitly:
-
-```bash
-python -m researchloop run workspaces/ai-research-agents \
-  --search tavily \
-  --source-policy source_policy.json
-```
+cleaner page content than search snippets alone.
 
 ## Run Research
 
@@ -190,29 +190,39 @@ research topic with the question you want answered:
 ```bash
 python -m researchloop init software-news \
   "What are the most important software industry updates this month?"
-python -m researchloop run workspaces/software-news --search tavily --max-results 5
+python -m researchloop run workspaces/software-news
+```
+
+`init` copies `run_config.json` and `source_policy.json` into the workspace.
+That is intentional. I want the behavior of a research run to live with the
+research record, not in a long command that disappears from history.
+
+The checked-in default is source-backed web research:
+
+```json
+{
+  "backend": "openai-compatible",
+  "search_backend": "tavily",
+  "synthesis_mode": "markdown",
+  "max_results": 5,
+  "iterations": 1,
+  "min_delta": 0.1
+}
 ```
 
 The kept answer is written to `workspaces/software-news/report.md`. The same
 workspace also keeps `sources.jsonl`, `eval.md`, `results.tsv`, and every
 candidate iteration for audit.
 
-If the endpoint struggles with structured JSON output, use Markdown synthesis:
-
-```bash
-python -m researchloop run workspaces/software-news \
-  --search tavily \
-  --synthesis-mode markdown
-```
-
-If you do not want web search, ingest trusted material first and run with
-`--search none`:
+If you do not want web search, ingest trusted material first, set
+`"search_backend": "none"` in the workspace `run_config.json`, and run the
+workspace normally:
 
 ```bash
 python -m researchloop ingest workspaces/software-news \
   --title "Internal notes" \
   --text "Your source text here."
-python -m researchloop run workspaces/software-news --search none
+python -m researchloop run workspaces/software-news
 ```
 
 ## Design Choices
@@ -221,6 +231,9 @@ python -m researchloop run workspaces/software-news --search none
   diffable, commit-friendly, and easy to move.
 - **OpenAI-compatible endpoint.** The runner should work with any compatible
   `/chat/completions` provider, not a single vendor API.
+- **Workspace config over command flags.** The normal path is
+  `researchloop run <workspace>`. The run settings are plain files beside the
+  research artifacts.
 - **Source policy is code-like config.** Search rules belong in
   `source_policy.json`, not buried inside prompts or environment variables.
 - **Keep/discard is the control loop.** The current report changes only when a

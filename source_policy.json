@@ -12,7 +12,7 @@
   "extract_format": "markdown",
   "include_domains": [],
   "notes": [
-    "Keep credentials in .env. Keep source-selection rules in this file.",
+    "Keep source-selection rules here so runs can be reviewed and repeated.",
     "Use include_domains for narrow research where the acceptable source universe is known.",
     "Use exclude_domains for noisy social, video, forum, or repost domains.",
     "Manual ingestion can still add a blocked source when a human intentionally accepts it."

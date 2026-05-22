@@ -1,7 +1,7 @@
 [project]
 name = "researchloop"
 version = "0.1.0"
-description = "A file-based autonomous research loop prototype"
+description = "A file-based autonomous research loop"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -18,6 +18,7 @@ py-modules = [
     "researchloop",
     "prompts",
     "retry",
+    "run_config",
     "scoring",
     "search",
     "source_policy",

@@ -8,6 +8,7 @@ from pathlib import Path
 from core import add_manual_source, init_workspace, run_iteration
 from llm import ResearchLLM
 from models import Claim, ResearchResult, Source
+from run_config import RunConfig, load_run_config_for_workspace, write_run_config
 from scoring import evaluate_report
 from search import NoSearch, SearchBackend, TavilySearch
 from source_policy import SourcePolicy, load_policy_for_workspace
@@ -140,6 +141,38 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(policy["include_domains"], ["example.com", "docs.example.com"])
             self.assertEqual(policy["exclude_domains"], ["forum.example.com"])
             self.assertIn("source_policy.json", read_text(workspace / "topic.md"))
+
+    def test_init_writes_reviewable_run_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(
+                Path(tmp),
+                "run config test",
+                "How should the runner behave?",
+                run_config=RunConfig(search_backend="none", synthesis_mode="json", max_results=3),
+            )
+
+            config = json.loads((workspace / "run_config.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search_backend"], "none")
+            self.assertEqual(config["synthesis_mode"], "json")
+            self.assertEqual(config["max_results"], 3)
+            self.assertIn("run_config.json", read_text(workspace / "topic.md"))
+
+    def test_run_config_resolution_prefers_workspace_file_and_supports_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(Path(tmp), "config resolution", "Which run config is used?")
+            write_run_config(
+                workspace / "run_config.json",
+                RunConfig(search_backend="none", synthesis_mode="json", max_results=2),
+            )
+
+            config = load_run_config_for_workspace(workspace)
+            overridden = config.with_overrides(max_results=8, search_backend=None)
+
+            self.assertEqual(config.search_backend, "none")
+            self.assertEqual(config.synthesis_mode, "json")
+            self.assertEqual(overridden.search_backend, "none")
+            self.assertEqual(overridden.max_results, 8)
 
     def test_source_policy_filters_domains(self) -> None:
         policy = SourcePolicy(

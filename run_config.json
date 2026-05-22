@@ -1,0 +1,10 @@
+{
+  "backend": "openai-compatible",
+  "iterations": 1,
+  "max_results": 5,
+  "min_delta": 0.1,
+  "model": null,
+  "search_backend": "tavily",
+  "synthesis_mode": "markdown",
+  "version": 1
+}

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core import add_manual_source, evaluate_workspace, init_workspace, run_iteration
 from llm import LLMError, build_llm
+from run_config import load_default_run_config, load_run_config_for_workspace
 from search import SearchError, build_search_backend
 from source_policy import load_default_policy, load_policy_for_workspace
 from storage import read_text
@@ -51,29 +52,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subcommands.add_parser("run", help="Run one or more research iterations.")
     run_parser.add_argument("workspace", type=Path)
-    run_parser.add_argument("--iterations", type=int, default=1)
+    run_parser.add_argument("--iterations", type=int, default=None, help=argparse.SUPPRESS)
     run_parser.add_argument(
         "--backend",
-        default="openai-compatible",
+        default=None,
         choices=["openai-compatible", "openai", "chat-completions"],
-        help="LLM backend. All choices use OpenAI-compatible chat completions.",
+        help=argparse.SUPPRESS,
     )
-    run_parser.add_argument("--model", default=None, help="Model name for the compatible endpoint.")
+    run_parser.add_argument("--model", default=None, help=argparse.SUPPRESS)
     run_parser.add_argument(
         "--synthesis-mode",
         choices=["json", "markdown"],
         default=None,
-        help="Report synthesis mode. Defaults to RESEARCH_SYNTHESIS_MODE or json.",
+        help=argparse.SUPPRESS,
     )
-    run_parser.add_argument("--search", default="none", choices=["none", "tavily"])
+    run_parser.add_argument("--search", default=None, choices=["none", "tavily"], help=argparse.SUPPRESS)
     run_parser.add_argument(
         "--source-policy",
         type=Path,
         default=None,
-        help="Optional source_policy.json override for this run.",
+        help=argparse.SUPPRESS,
     )
-    run_parser.add_argument("--max-results", type=int, default=5)
-    run_parser.add_argument("--min-delta", type=float, default=0.1)
+    run_parser.add_argument("--max-results", type=int, default=None, help=argparse.SUPPRESS)
+    run_parser.add_argument("--min-delta", type=float, default=None, help=argparse.SUPPRESS)
     run_parser.set_defaults(func=cmd_run)
 
     eval_parser = subcommands.add_parser("evaluate", help="Re-score the current kept report.")
@@ -89,7 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_init(args: argparse.Namespace) -> int:
     policy = load_default_policy(args.source_policy)
-    workspace = init_workspace(args.root, args.name, args.question, source_policy=policy)
+    run_config = load_default_run_config()
+    workspace = init_workspace(args.root, args.name, args.question, source_policy=policy, run_config=run_config)
     print(workspace)
     return 0
 
@@ -102,16 +104,25 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    llm = build_llm(args.backend, model=args.model, synthesis_mode=args.synthesis_mode)
+    config = load_run_config_for_workspace(args.workspace).with_overrides(
+        backend=args.backend,
+        model=args.model,
+        synthesis_mode=args.synthesis_mode,
+        search_backend=args.search,
+        max_results=args.max_results,
+        min_delta=args.min_delta,
+        iterations=args.iterations,
+    )
+    llm = build_llm(config.backend, model=config.model, synthesis_mode=config.synthesis_mode)
     source_policy = load_policy_for_workspace(args.workspace, args.source_policy)
-    search_backend = build_search_backend(args.search, source_policy=source_policy)
-    for _ in range(args.iterations):
+    search_backend = build_search_backend(config.search_backend, source_policy=source_policy)
+    for _ in range(config.iterations):
         result = run_iteration(
             workspace=args.workspace,
             llm=llm,
             search_backend=search_backend,
-            max_results=args.max_results,
-            min_delta=args.min_delta,
+            max_results=config.max_results,
+            min_delta=config.min_delta,
         )
         print(
             f"{result['iteration']}: {result['status']} "

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from llm import ResearchLLM
 from models import Claim, Evaluation, Source
+from run_config import RUN_CONFIG_FILENAME, RunConfig, write_run_config
 from scoring import evaluate_report, format_evaluation
 from search import SearchBackend
 from source_policy import POLICY_FILENAME, SourcePolicy, write_source_policy
@@ -26,7 +27,13 @@ from storage import (
 )
 
 
-def init_workspace(root: Path, name: str, question: str, source_policy: SourcePolicy | None = None) -> Path:
+def init_workspace(
+    root: Path,
+    name: str,
+    question: str,
+    source_policy: SourcePolicy | None = None,
+    run_config: RunConfig | None = None,
+) -> Path:
     workspace = workspace_path(root, name)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "iterations").mkdir(exist_ok=True)
@@ -42,6 +49,7 @@ def init_workspace(root: Path, name: str, question: str, source_policy: SourcePo
 ## Source Policy
 
 Operational source-selection rules are stored in `{POLICY_FILENAME}`.
+Run behavior is stored in `{RUN_CONFIG_FILENAME}`.
 
 - Prefer primary sources, official documentation, academic papers, standards,
   filings, original data, and direct product documentation.
@@ -56,6 +64,7 @@ contradiction handling, and updateability over a one-shot answer.
 """,
     )
     write_source_policy(workspace / POLICY_FILENAME, policy)
+    write_run_config(workspace / RUN_CONFIG_FILENAME, run_config or RunConfig.default())
     write_text(workspace / "report.md", "# Research Report\n\nNo kept report yet.\n")
     write_jsonl(workspace / "sources.jsonl", [])
     write_jsonl(workspace / "claims.jsonl", [])
