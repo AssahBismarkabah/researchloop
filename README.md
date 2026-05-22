@@ -52,11 +52,12 @@ local UI:
 python -m researchloop ui
 ```
 
-Open `http://127.0.0.1:8787`.
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
 Use `New` to start research. Use `Researches` to reopen previous local
-workspaces. The UI creates normal directories under `workspaces/`; it does not
-use a database or trap the result inside the browser.
+workspaces. The UI creates normal directories under
+[`workspaces/`](workspaces/); it does not use a database or trap the result
+inside the browser.
 
 ## How It Works
 
@@ -67,22 +68,21 @@ records, evaluator notes, and iteration log.
 
 The important files are the interface:
 
-```text
-quality-bar.md        # target level, bench gate, and tool admission rules
-program.md            # operating instructions for bounded research runs
-run_config.json       # default run behavior copied into each workspace
-source_policy.json    # source-selection rules copied into each workspace
-workspaces/<name>/topic.md          # the research question and constraints
-workspaces/<name>/run_config.json   # how this workspace runs
-workspaces/<name>/source_policy.json # source rules for this workspace
-workspaces/<name>/sources.jsonl     # source snapshots with stable IDs like S1
-workspaces/<name>/claims.jsonl      # kept claim records with source IDs
-workspaces/<name>/report.md         # current best report
-workspaces/<name>/eval.md           # verifier summary for the current best report
-workspaces/<name>/results.tsv       # iteration log
-workspaces/<name>/state.json        # current best score and iteration
-workspaces/<name>/iterations/       # candidate artifacts for every run
-```
+- [quality-bar.md](quality-bar.md): target level, bench gate, and tool admission rules.
+- [program.md](program.md): operating instructions for bounded research runs.
+- [run_config.json](run_config.json): default run behavior copied into each workspace.
+- [source_policy.json](source_policy.json): source-selection rules copied into each workspace.
+- [`workspaces/<name>/`](workspaces/): generated research workspace directory.
+- `workspaces/<name>/topic.md`: the research question and constraints.
+- `workspaces/<name>/run_config.json`: how this workspace runs.
+- `workspaces/<name>/source_policy.json`: source rules for this workspace.
+- `workspaces/<name>/sources.jsonl`: source snapshots with stable IDs like S1.
+- `workspaces/<name>/claims.jsonl`: kept claim records with source IDs.
+- `workspaces/<name>/report.md`: current best report.
+- `workspaces/<name>/eval.md`: verifier summary for the current best report.
+- `workspaces/<name>/results.tsv`: iteration log.
+- `workspaces/<name>/state.json`: current best score and iteration.
+- `workspaces/<name>/iterations/`: candidate artifacts for every run.
 
 By design, `report.md` is not overwritten just because the model wrote
 something new. A candidate has to beat the current score. If it loses, the
@@ -96,23 +96,23 @@ a repeatable signal, not so humans can stop reviewing the result.
 
 ## Project Structure
 
-```text
-researchloop.py       # module entrypoint
-cli.py                # command-line interface
-core.py               # workspace lifecycle and keep/discard loop
-llm.py                # OpenAI-compatible chat-completions adapter
-search.py             # search backend adapter
-run_config.py         # run configuration loading and validation
-source_policy.py      # source policy loading and URL filtering
-scoring.py            # transparent verifier score
-prompts.py            # planning and synthesis prompts
-models.py             # source, claim, report, evaluation records
-storage.py            # plain-file persistence helpers
-```
+- [researchloop.py](researchloop.py): module entrypoint.
+- [cli.py](cli.py): command-line interface.
+- [ui.py](ui.py): local browser UI.
+- [core.py](core.py): workspace lifecycle and keep/discard loop.
+- [llm.py](llm.py): OpenAI-compatible chat-completions adapter.
+- [search.py](search.py): search backend adapter.
+- [run_config.py](run_config.py): run configuration loading and validation.
+- [source_policy.py](source_policy.py): source policy loading and URL filtering.
+- [scoring.py](scoring.py): transparent verifier score.
+- [prompts.py](prompts.py): planning and synthesis prompts.
+- [models.py](models.py): source, claim, report, evaluation records.
+- [storage.py](storage.py): plain-file persistence helpers.
 
-`program.md` is the human-facing operating document: it tells an agent how to
-run bounded research work. `source_policy.json` is where source rules live. The
-Python files are the runner; the workspace files are the research record.
+[program.md](program.md) is the human-facing operating document: it tells an
+agent how to run bounded research work. [source_policy.json](source_policy.json)
+is where source rules live. The Python files are the runner; the workspace files
+are the research record.
 
 ## Verification
 

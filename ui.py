@@ -1014,6 +1014,7 @@ INDEX_HTML = """<!doctype html>
     const researchesList = document.getElementById("researchesList");
     const refreshResearches = document.getElementById("refreshResearches");
     let pollTimer = null;
+    let activeJobId = null;
     let statusMode = "idle";
 
     tabs.forEach((tab) => {
@@ -1030,7 +1031,7 @@ INDEX_HTML = """<!doctype html>
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      clearInterval(pollTimer);
+      stopPolling();
       setActiveView("newView", false);
       setRunning(true);
       hideResult();
@@ -1045,34 +1046,58 @@ INDEX_HTML = """<!doctype html>
           throw new Error(payload.error || "Research could not start.");
         }
         workspaceHint.textContent = payload.workspace_name;
-        poll(payload.id);
-        pollTimer = setInterval(() => poll(payload.id), 1400);
+        startPolling(payload.id);
       } catch (error) {
         showError(error.message);
         setRunning(false);
       }
     });
 
+    function startPolling(jobId) {
+      activeJobId = jobId;
+      stopPolling();
+      poll(jobId);
+      pollTimer = setInterval(() => poll(jobId), 1400);
+    }
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
     async function poll(jobId) {
-      const response = await fetch(`/api/jobs/${jobId}`);
-      const job = await response.json();
-      if (!response.ok) {
-        showError(job.error || "Job not found.");
-        clearInterval(pollTimer);
-        setRunning(false);
-        return;
-      }
-      updateProgress(job);
-      if (job.status === "done") {
-        clearInterval(pollTimer);
-        setRunning(false);
-        renderResult(job.result);
-        loadResearches();
-      }
-      if (job.status === "error") {
-        clearInterval(pollTimer);
-        setRunning(false);
-        showError(job.error || "Research failed.");
+      try {
+        const response = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+        const job = await response.json();
+        if (jobId !== activeJobId) return;
+        if (!response.ok) {
+          showError(job.error || "Job not found.");
+          activeJobId = null;
+          stopPolling();
+          setRunning(false);
+          return;
+        }
+        updateProgress(job);
+        if (job.status === "done") {
+          activeJobId = null;
+          stopPolling();
+          setRunning(false);
+          renderResult(job.result);
+          loadResearches();
+        }
+        if (job.status === "error") {
+          activeJobId = null;
+          stopPolling();
+          setRunning(false);
+          showError(job.error || "Research failed.");
+          loadResearches();
+        }
+      } catch (_error) {
+        if (jobId !== activeJobId) return;
+        stageText.textContent = "Checking local run";
+        setStatus("Checking run", "running");
       }
     }
 
@@ -1135,16 +1160,21 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function loadResearches() {
-      researchesList.innerHTML = `<li class="empty">Loading researches</li>`;
+    async function loadResearches(options = {}) {
+      const quiet = Boolean(options.quiet);
+      if (!quiet) {
+        researchesList.innerHTML = `<li class="empty">Loading researches</li>`;
+      }
       try {
-        const response = await fetch("/api/researches");
+        const response = await fetch("/api/researches", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Could not load researches.");
         }
         renderResearches(payload.researches || []);
+        reconcileActiveResearch(payload.researches || []);
       } catch (error) {
+        if (quiet) return;
         researchesList.innerHTML = "";
         const item = document.createElement("li");
         item.className = "empty";
@@ -1183,6 +1213,37 @@ INDEX_HTML = """<!doctype html>
         item.append(button);
         researchesList.append(item);
       });
+    }
+
+    function reconcileActiveResearch(items) {
+      if (activeJobId) {
+        const active = items.find((item) => item.job_id === activeJobId);
+        if (active && active.status === "done") {
+          activeJobId = null;
+          stopPolling();
+          setRunning(false);
+          openResearch(active.name);
+          return;
+        }
+        if (active && active.status === "error") {
+          activeJobId = null;
+          stopPolling();
+          setRunning(false);
+          showError(active.stage || "Research failed.");
+          return;
+        }
+      }
+
+      const running = items.find((item) => item.job_id && ["queued", "running"].includes(item.status));
+      if (!activeJobId && running) {
+        setRunning(true);
+        updateProgress({
+          stage: running.stage || running.status,
+          workspace: running.workspace,
+          workspace_name: running.name
+        });
+        startPolling(running.job_id);
+      }
     }
 
     async function openResearch(name) {
@@ -1422,6 +1483,9 @@ INDEX_HTML = """<!doctype html>
 
     checkConnection();
     setInterval(checkConnection, 5000);
+    setInterval(() => {
+      if (activeJobId) loadResearches({ quiet: true });
+    }, 5000);
     loadResearches();
   </script>
 </body>
