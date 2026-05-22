@@ -85,6 +85,17 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser.add_argument("workspace", type=Path)
     show_parser.set_defaults(func=cmd_show)
 
+    ui_parser = subcommands.add_parser("ui", help="Start the local browser UI.")
+    ui_parser.add_argument("--host", default=os.getenv("RESEARCH_UI_HOST", "127.0.0.1"), help=argparse.SUPPRESS)
+    ui_parser.add_argument("--port", type=int, default=int(os.getenv("RESEARCH_UI_PORT", "8787")), help=argparse.SUPPRESS)
+    ui_parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(os.getenv("RESEARCH_WORKSPACE_ROOT", "workspaces")),
+        help=argparse.SUPPRESS,
+    )
+    ui_parser.set_defaults(func=cmd_ui)
+
     return parser
 
 
@@ -140,6 +151,13 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     state = read_text(args.workspace / "state.json", "{}").strip()
     print(state)
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    from ui import run_ui
+
+    run_ui(host=args.host, port=args.port, root=args.root)
     return 0
 
 

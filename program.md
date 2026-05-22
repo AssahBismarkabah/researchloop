@@ -36,6 +36,12 @@ Run one iteration:
 python -m researchloop run workspaces/<name>
 ```
 
+For the local browser UI:
+
+```bash
+python -m researchloop ui
+```
+
 If search should be disabled, set `"search_backend": "none"` in the workspace
 `run_config.json` before running.
 

@@ -194,6 +194,16 @@ python -m researchloop init software-news \
 python -m researchloop run workspaces/software-news
 ```
 
+For a local browser UI, run:
+
+```bash
+python -m researchloop ui
+```
+
+Then open `http://127.0.0.1:8787`. The UI creates normal workspaces under
+`workspaces/`; it does not use a database or hide artifacts behind the browser.
+Use `New` to start a run and `Researches` to reopen previous local workspaces.
+
 `init` copies `run_config.json` and `source_policy.json` into the workspace.
 That is intentional. I want the behavior of a research run to live with the
 research record, not in a long command that disappears from history.
@@ -235,6 +245,9 @@ python -m researchloop run workspaces/software-news
 - **Workspace config over command flags.** The normal path is
   `researchloop run <workspace>`. The run settings are plain files beside the
   research artifacts.
+- **Local UI as a thin shell.** `researchloop ui` starts a small localhost app
+  over the same runner. The browser is a control surface, not a second product
+  path.
 - **Source policy is code-like config.** Search rules belong in
   `source_policy.json`, not buried inside prompts or environment variables.
 - **Keep/discard is the control loop.** The current report changes only when a

@@ -12,6 +12,7 @@ engine, truth oracle, hosted product, or publishing system.
 At this level, the system is good enough when it can:
 
 - run with `researchloop run <workspace>`;
+- start a thin local UI with `researchloop ui`;
 - keep run behavior in `run_config.json`;
 - keep source-selection rules in `source_policy.json`;
 - search the web through Tavily when configured;
@@ -26,7 +27,8 @@ The tools already chosen are enough for this level:
 - OpenAI-compatible chat completions for model portability;
 - Tavily Search and Extract for normal web source collection;
 - plain files for auditability and repeatable runs;
-- a local verifier for citation and evidence hygiene.
+- a local verifier for citation and evidence hygiene;
+- a localhost UI as a small control surface over the same runner.
 
 ## Bench Gate
 
@@ -76,6 +78,8 @@ Examples:
 - Add scheduling only after recurring reports are already useful when run
   manually.
 - Add publishing only after the generated report is worth distributing.
+- Add hosted infrastructure only after local runs need to be shared or continue
+  after the local machine is closed.
 
 ## Not Yet Needed
 
@@ -83,7 +87,7 @@ These are intentionally outside the current level:
 
 - Kernel or another browser runtime;
 - Notion storage or publishing;
-- a dedicated UI;
+- a hosted product UI;
 - a job queue;
 - automatic truth verification;
 - broad connector support.
