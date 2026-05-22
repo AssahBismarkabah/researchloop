@@ -1,5 +1,8 @@
 # ResearchLoop
 
+<img src="./docs/writing-candidate-report.png" alt="writing candidate">
+
+
 `ResearchLoop` is a local research app for source-backed reports. It starts a
 small browser UI on localhost, runs research on your machine, and writes every
 artifact to plain files.
