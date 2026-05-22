@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 POLICY_FILENAME = "source_policy.json"
 VALID_SEARCH_DEPTHS = {"basic", "advanced"}
+VALID_TIME_RANGES = {"day", "week", "month", "year"}
 
 
 DEFAULT_EXCLUDE_DOMAINS = [
@@ -25,6 +26,7 @@ DEFAULT_EXCLUDE_DOMAINS = [
 class SourcePolicy:
     version: int = 1
     search_depth: str = "advanced"
+    time_range: str | None = None
     include_domains: list[str] = field(default_factory=list)
     exclude_domains: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDE_DOMAINS))
     preferred_source_types: list[str] = field(
@@ -52,6 +54,13 @@ class SourcePolicy:
             raise ValueError(
                 f"source policy search_depth must be one of {sorted(VALID_SEARCH_DEPTHS)}, got {self.search_depth!r}"
             )
+        self.time_range = str(self.time_range).strip().lower() if self.time_range is not None else None
+        if self.time_range == "":
+            self.time_range = None
+        if self.time_range is not None and self.time_range not in VALID_TIME_RANGES:
+            raise ValueError(
+                f"source policy time_range must be one of {sorted(VALID_TIME_RANGES)}, got {self.time_range!r}"
+            )
         self.include_domains = _clean_domains(_as_list(self.include_domains))
         self.exclude_domains = _clean_domains(_as_list(self.exclude_domains))
         self.preferred_source_types = _clean_strings(_as_list(self.preferred_source_types))
@@ -66,6 +75,7 @@ class SourcePolicy:
         return cls(
             version=int(data.get("version") or 1),
             search_depth=str(data.get("search_depth") or "advanced"),
+            time_range=data.get("time_range"),
             include_domains=_as_list(data.get("include_domains") or []),
             exclude_domains=_as_list(data.get("exclude_domains") or []),
             preferred_source_types=_as_list(data.get("preferred_source_types") or []),
@@ -76,6 +86,7 @@ class SourcePolicy:
         return {
             "version": self.version,
             "search_depth": self.search_depth,
+            "time_range": self.time_range,
             "include_domains": self.include_domains,
             "exclude_domains": self.exclude_domains,
             "preferred_source_types": self.preferred_source_types,

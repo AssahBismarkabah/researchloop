@@ -57,6 +57,8 @@ class TavilySearch(SearchBackend):
             body["include_domains"] = self.source_policy.include_domains
         if self.source_policy.exclude_domains:
             body["exclude_domains"] = self.source_policy.exclude_domains
+        if self.source_policy.time_range:
+            body["time_range"] = self.source_policy.time_range
         request = urllib.request.Request(
             "https://api.tavily.com/search",
             data=json.dumps(body).encode("utf-8"),

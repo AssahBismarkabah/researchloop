@@ -93,6 +93,7 @@ class CoreTests(unittest.TestCase):
                 "policy test",
                 "What should search prefer?",
                 source_policy=SourcePolicy(
+                    time_range="DAY",
                     include_domains=["Example.com", "https://docs.example.com/path"],
                     exclude_domains=["forum.example.com"],
                 ),
@@ -100,6 +101,7 @@ class CoreTests(unittest.TestCase):
 
             policy = json.loads((workspace / "source_policy.json").read_text(encoding="utf-8"))
 
+            self.assertEqual(policy["time_range"], "day")
             self.assertEqual(policy["include_domains"], ["example.com", "docs.example.com"])
             self.assertEqual(policy["exclude_domains"], ["forum.example.com"])
             self.assertIn("source_policy.json", read_text(workspace / "topic.md"))

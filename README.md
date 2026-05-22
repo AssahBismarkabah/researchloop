@@ -103,6 +103,7 @@ copies that policy into every workspace so runs remain auditable.
 ```json
 {
   "search_depth": "advanced",
+  "time_range": null,
   "include_domains": [],
   "exclude_domains": [
     "facebook.com",
@@ -116,8 +117,9 @@ copies that policy into every workspace so runs remain auditable.
 ```
 
 Use `include_domains` when a topic should be constrained to known primary
-sources. Use `exclude_domains` to remove low-signal domains. A run can override
-the workspace policy explicitly:
+sources. Use `exclude_domains` to remove low-signal domains. Use
+`"time_range": "day"` for current-day research. A run can override the workspace
+policy explicitly:
 
 ```bash
 python -m researchloop run workspaces/ai-research-agents \

@@ -104,7 +104,7 @@ def run_iteration(
     previous_eval = read_json(workspace / "state.json", {"best_score": 0.0})
 
     gaps = _extract_prior_gaps(workspace)
-    queries = llm.plan_queries(topic, previous_report, gaps)
+    queries = [] if search_backend.name == "none" else llm.plan_queries(topic, previous_report, gaps)
     added_sources = _collect_sources(search_backend, sources, queries, max_results)
     if added_sources:
         sources.extend(added_sources)

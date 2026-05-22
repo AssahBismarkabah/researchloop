@@ -45,7 +45,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         api_key: str | None = None,
         model: str | None = None,
         temperature: float = 0.2,
-        timeout: int = 120,
+        timeout: int = 240,
     ) -> None:
         self.base_url = (
             base_url
@@ -56,7 +56,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         self.api_key = api_key or os.getenv("OPENAI_COMPAT_API_KEY") or os.getenv("OPENAI_API_KEY")
         self.model = model or os.getenv("RESEARCH_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
         self.temperature = temperature
-        self.timeout = timeout
+        self.timeout = int(os.getenv("RESEARCH_LLM_TIMEOUT", str(timeout)))
         if not self.api_key:
             raise LLMError(
                 "Missing API key. Set OPENAI_COMPAT_API_KEY or OPENAI_API_KEY for the "
@@ -78,18 +78,12 @@ class OpenAICompatibleLLM(ResearchLLM):
         previous_report: str,
         previous_claims: list[Claim],
     ) -> ResearchResult:
+        if os.getenv("RESEARCH_SYNTHESIS_MODE", "json").strip().lower() == "markdown":
+            return self._synthesize_markdown(topic, sources, previous_report, previous_claims)
         try:
             payload = self._complete_json(synthesis_prompt(topic, sources, previous_report, previous_claims))
         except (LLMError, json.JSONDecodeError):
-            report_markdown = self._complete_text(
-                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims)
-            )
-            return ResearchResult(
-                report_markdown=report_markdown.strip(),
-                claims=_claims_from_report(report_markdown),
-                gaps=_gaps_from_report(report_markdown),
-                summary="Generated via Markdown fallback because the endpoint returned malformed JSON.",
-            )
+            return self._synthesize_markdown(topic, sources, previous_report, previous_claims)
         claims = []
         for index, raw_claim in enumerate(payload.get("claims") or [], start=1):
             raw_source_ids = raw_claim.get("source_ids") or []
@@ -116,6 +110,21 @@ class OpenAICompatibleLLM(ResearchLLM):
             claims=claims,
             gaps=[str(item) for item in payload.get("gaps") or []],
             summary=str(payload.get("summary") or ""),
+        )
+
+    def _synthesize_markdown(
+        self,
+        topic: str,
+        sources: list[Source],
+        previous_report: str,
+        previous_claims: list[Claim],
+    ) -> ResearchResult:
+        report_markdown = self._complete_text(markdown_synthesis_prompt(topic, sources, previous_report, previous_claims))
+        return ResearchResult(
+            report_markdown=report_markdown.strip(),
+            claims=_claims_from_report(report_markdown),
+            gaps=_gaps_from_report(report_markdown),
+            summary="Generated as Markdown and extracted claims from the report.",
         )
 
     def _complete_json(self, user_prompt: str) -> dict[str, Any]:
@@ -156,7 +165,7 @@ class OpenAICompatibleLLM(ResearchLLM):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": int(os.getenv("RESEARCH_MAX_TOKENS", "2200")),
+            "max_tokens": int(os.getenv("RESEARCH_TEXT_MAX_TOKENS") or os.getenv("RESEARCH_MAX_TOKENS", "4000")),
         }
         data = self._post("/chat/completions", body)
         return _extract_chat_content(data)
@@ -179,6 +188,8 @@ class OpenAICompatibleLLM(ResearchLLM):
             raise LLMError(f"LLM endpoint returned HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise LLMError(f"Could not reach LLM endpoint: {exc}") from exc
+        except TimeoutError as exc:
+            raise LLMError(f"LLM endpoint timed out after {self.timeout} seconds.") from exc
 
 
 def build_llm(name: str, model: str | None = None) -> ResearchLLM:
@@ -260,18 +271,19 @@ def markdown_synthesis_prompt(
     previous_claims: list[Claim],
 ) -> str:
     source_blocks = []
-    for source in sources[:10]:
+    for source in sources[:25]:
         content = source.content.strip().replace("\x00", "")
         source_blocks.append(
             f"[{source.id}] {source.title}\nURL: {source.url or 'n/a'}\n"
-            f"Type: {source.source_type}\nContent:\n{content[:700]}"
+            f"Type: {source.source_type}\nRetrieved: {source.retrieved_at}\n"
+            f"Query: {source.query or 'n/a'}\nContent:\n{content[:220]}"
         )
     source_text = "\n\n---\n\n".join(source_blocks) or "No sources supplied."
     return f"""Research topic:
 {topic}
 
 Previous report:
-{previous_report[:2500] if previous_report else "No prior report."}
+{previous_report[:800] if previous_report else "No prior report."}
 
 Previous claim count: {len(previous_claims)}
 
@@ -289,7 +301,11 @@ Write Markdown only. Use these exact sections:
 Rules:
 - Every substantive bullet or sentence must cite supplied source IDs like [S1].
 - Do not cite source IDs that were not supplied.
-- Keep the report under 900 words.
+- Do not use emoji or decorative symbols in headings.
+- Under ## Current Answer, preserve explicit formatting requirements from the
+  research topic. If the topic asks for categories, Problems & Pain Points, or
+  Investment Opportunities, include those subsections there.
+- Keep the report under 1200 words.
 - Prefer synthesis over source-by-source summary.
 - Include 6-8 evidence bullets.
 """
