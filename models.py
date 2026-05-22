@@ -70,6 +70,7 @@ class Evaluation:
     claim_count: int
     cited_source_count: int
     unsupported_claim_count: int
+    weak_claim_count: int
     gap_count: int
     citation_count: int
     structure_score: float

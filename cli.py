@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM backend. All choices use OpenAI-compatible chat completions.",
     )
     run_parser.add_argument("--model", default=None, help="Model name for the compatible endpoint.")
+    run_parser.add_argument(
+        "--synthesis-mode",
+        choices=["json", "markdown"],
+        default=None,
+        help="Report synthesis mode. Defaults to RESEARCH_SYNTHESIS_MODE or json.",
+    )
     run_parser.add_argument("--search", default="none", choices=["none", "tavily"])
     run_parser.add_argument(
         "--source-policy",
@@ -96,7 +102,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    llm = build_llm(args.backend, model=args.model)
+    llm = build_llm(args.backend, model=args.model, synthesis_mode=args.synthesis_mode)
     source_policy = load_policy_for_workspace(args.workspace, args.source_policy)
     search_backend = build_search_backend(args.search, source_policy=source_policy)
     for _ in range(args.iterations):

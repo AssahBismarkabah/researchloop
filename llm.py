@@ -10,10 +10,13 @@ from typing import Any
 
 from models import Claim, ResearchResult, Source
 from prompts import SYSTEM_PROMPT, query_plan_prompt, synthesis_prompt
+from retry import call_with_retries
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, message: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class ResearchLLM(ABC):
@@ -46,6 +49,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         model: str | None = None,
         temperature: float = 0.2,
         timeout: int = 240,
+        synthesis_mode: str | None = None,
     ) -> None:
         self.base_url = (
             base_url
@@ -57,6 +61,9 @@ class OpenAICompatibleLLM(ResearchLLM):
         self.model = model or os.getenv("RESEARCH_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
         self.temperature = temperature
         self.timeout = int(os.getenv("RESEARCH_LLM_TIMEOUT", str(timeout)))
+        self.synthesis_mode = (synthesis_mode or os.getenv("RESEARCH_SYNTHESIS_MODE", "json")).strip().lower()
+        if self.synthesis_mode not in {"json", "markdown"}:
+            raise LLMError("synthesis_mode must be 'json' or 'markdown'.")
         if not self.api_key:
             raise LLMError(
                 "Missing API key. Set OPENAI_COMPAT_API_KEY or OPENAI_API_KEY for the "
@@ -78,7 +85,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         previous_report: str,
         previous_claims: list[Claim],
     ) -> ResearchResult:
-        if os.getenv("RESEARCH_SYNTHESIS_MODE", "json").strip().lower() == "markdown":
+        if self.synthesis_mode == "markdown":
             return self._synthesize_markdown(topic, sources, previous_report, previous_claims)
         try:
             payload = self._complete_json(synthesis_prompt(topic, sources, previous_report, previous_claims))
@@ -180,21 +187,25 @@ class OpenAICompatibleLLM(ResearchLLM):
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise LLMError(f"LLM endpoint returned HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise LLMError(f"Could not reach LLM endpoint: {exc}") from exc
-        except TimeoutError as exc:
-            raise LLMError(f"LLM endpoint timed out after {self.timeout} seconds.") from exc
+        def once() -> dict[str, Any]:
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                retryable = exc.code in {429, 500, 502, 503, 504}
+                raise LLMError(f"LLM endpoint returned HTTP {exc.code}: {detail}", retryable=retryable) from exc
+            except urllib.error.URLError as exc:
+                raise LLMError(f"Could not reach LLM endpoint: {exc}") from exc
+            except TimeoutError as exc:
+                raise LLMError(f"LLM endpoint timed out after {self.timeout} seconds.", retryable=True) from exc
+
+        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)))
 
 
-def build_llm(name: str, model: str | None = None) -> ResearchLLM:
+def build_llm(name: str, model: str | None = None, synthesis_mode: str | None = None) -> ResearchLLM:
     if name in {"openai-compatible", "openai", "chat-completions"}:
-        return OpenAICompatibleLLM(model=model)
+        return OpenAICompatibleLLM(model=model, synthesis_mode=synthesis_mode)
     raise ValueError(f"Unknown LLM backend: {name}")
 
 

@@ -18,11 +18,15 @@ def evaluate_report(
     gaps: list[str],
 ) -> Evaluation:
     known_source_ids = {source.id for source in sources}
+    sources_by_id = {source.id: source for source in sources}
     cited_ids = set(citation_ids(report_markdown))
     supported_claims = [
         claim for claim in claims if claim.source_ids and all(sid in known_source_ids for sid in claim.source_ids)
     ]
     unsupported_claim_count = len(claims) - len(supported_claims)
+    weak_claim_count = sum(
+        1 for claim in supported_claims if not _claim_has_textual_support(claim, sources_by_id)
+    )
     claim_count = len(claims)
     citation_count = len(citation_ids(report_markdown))
     citation_coverage = len(supported_claims) / claim_count if claim_count else 0.0
@@ -40,6 +44,7 @@ def evaluate_report(
         + 10.0 * structure_score
     )
     score -= 8.0 * unsupported_claim_count
+    score -= 4.0 * weak_claim_count
     score -= 2.0 * max(0, len(gaps) - 4)
     score = max(0.0, min(100.0, score))
 
@@ -48,6 +53,8 @@ def evaluate_report(
         notes.append("No sources are available; this run cannot be treated as evidence-backed research.")
     if unsupported_claim_count:
         notes.append(f"{unsupported_claim_count} claim(s) have missing or invalid source IDs.")
+    if weak_claim_count:
+        notes.append(f"{weak_claim_count} claim(s) cite known sources but have weak textual support.")
     if cited_source_count < min(2, len(sources)):
         notes.append("The report cites too few distinct sources.")
     if structure_score < 1.0:
@@ -61,6 +68,7 @@ def evaluate_report(
         claim_count=claim_count,
         cited_source_count=cited_source_count,
         unsupported_claim_count=unsupported_claim_count,
+        weak_claim_count=weak_claim_count,
         gap_count=len(gaps),
         citation_count=citation_count,
         structure_score=round(structure_score, 2),
@@ -81,6 +89,7 @@ Score: {evaluation.score:.2f}/100
 - Cited sources: {evaluation.cited_source_count}
 - Citations in report: {evaluation.citation_count}
 - Unsupported claims: {evaluation.unsupported_claim_count}
+- Weakly supported claims: {evaluation.weak_claim_count}
 - Open gaps: {evaluation.gap_count}
 - Structure score: {evaluation.structure_score:.2f}
 
@@ -94,3 +103,42 @@ def _structure_score(markdown: str) -> float:
     expected = ["## Current Answer", "## Evidence", "## Open Gaps", "## Sources"]
     present = sum(1 for heading in expected if heading.lower() in markdown.lower())
     return present / len(expected)
+
+
+def _claim_has_textual_support(claim: Claim, sources_by_id: dict[str, Source]) -> bool:
+    terms = _meaningful_terms(claim.text)
+    if not terms:
+        return False
+    source_text = " ".join(
+        sources_by_id[source_id].content.lower()
+        for source_id in claim.source_ids
+        if source_id in sources_by_id
+    )
+    if not source_text:
+        return False
+    matches = sum(1 for term in terms if term in source_text)
+    required = min(3, max(1, len(terms) // 3))
+    return matches >= required
+
+
+def _meaningful_terms(text: str) -> list[str]:
+    stopwords = {
+        "about",
+        "after",
+        "also",
+        "because",
+        "being",
+        "could",
+        "from",
+        "have",
+        "into",
+        "more",
+        "that",
+        "their",
+        "there",
+        "this",
+        "with",
+        "would",
+    }
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9-]{3,}", text.lower())
+    return [word for word in words if word not in stopwords][:12]

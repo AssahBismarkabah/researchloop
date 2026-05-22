@@ -102,6 +102,8 @@ whether the report is operationally usable:
 
 - every substantive claim should cite source IDs like `[S1]`;
 - claim records must point to known sources;
+- cited sources should contain enough meaningful claim terms to count as
+  textually supportive;
 - the report should use multiple cited sources where possible;
 - the report should include the expected sections;
 - open gaps should be recorded instead of hidden;
@@ -152,6 +154,9 @@ copies that policy into every workspace so runs remain auditable.
 {
   "search_depth": "advanced",
   "time_range": null,
+  "extract_after_search": true,
+  "extract_depth": "basic",
+  "extract_format": "markdown",
   "include_domains": [],
   "exclude_domains": [
     "facebook.com",
@@ -166,8 +171,10 @@ copies that policy into every workspace so runs remain auditable.
 
 Use `include_domains` when a topic should be constrained to known primary
 sources. Use `exclude_domains` to remove low-signal domains. Use
-`"time_range": "day"` for current-day research. A run can override the workspace
-policy explicitly:
+`"time_range": "day"` for current-day research. By default, Tavily search
+results are enriched through Tavily Extract so the stored source snapshots have
+cleaner page content than search snippets alone. A run can override the
+workspace policy explicitly:
 
 ```bash
 python -m researchloop run workspaces/ai-research-agents \
@@ -189,6 +196,14 @@ python -m researchloop run workspaces/software-news --search tavily --max-result
 The kept answer is written to `workspaces/software-news/report.md`. The same
 workspace also keeps `sources.jsonl`, `eval.md`, `results.tsv`, and every
 candidate iteration for audit.
+
+If the endpoint struggles with structured JSON output, use Markdown synthesis:
+
+```bash
+python -m researchloop run workspaces/software-news \
+  --search tavily \
+  --synthesis-mode markdown
+```
 
 If you do not want web search, ingest trusted material first and run with
 `--search none`:
@@ -216,13 +231,13 @@ python -m researchloop run workspaces/software-news --search none
 
 ## Current Limits
 
-- Source quality depends on the search backend; social feeds and front pages can
-  return truncated or noisy records.
-- The verifier checks citation discipline and structure, not factual truth.
-- Provider failures are surfaced clearly, but there is no retry/backoff policy
-  yet.
-- There is no Notion export path yet.
-- Daily briefing is still a prompt-driven workflow, not a first-class command.
+- Source quality is better with extraction, but social feeds and front pages can
+  still return truncated or noisy records without a browser or official API.
+- The verifier checks citation discipline, structure, and lightweight textual
+  support, not factual truth.
+- Transient provider failures are retried, but there is no budget policy,
+  model-fallback policy, or job queue yet.
+- Workflows are still prompt/file driven; there is no dedicated product UI.
 
 ## Notable Links
 

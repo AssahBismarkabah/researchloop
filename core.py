@@ -109,8 +109,36 @@ def run_iteration(
     if added_sources:
         sources.extend(added_sources)
         save_sources(workspace, sources)
+    write_json(iteration_dir / "queries.json", {"queries": queries})
+    write_jsonl(iteration_dir / "added_sources.jsonl", [source.to_dict() for source in added_sources])
 
-    candidate = llm.synthesize(topic, sources, previous_report, previous_claims)
+    try:
+        candidate = llm.synthesize(topic, sources, previous_report, previous_claims)
+    except Exception as exc:
+        write_json(
+            iteration_dir / "error.json",
+            {
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+                "stage": "synthesis",
+                "sources_available": len(sources),
+            },
+        )
+        append_result_row(
+            workspace=workspace,
+            iteration=iteration_id,
+            timestamp=timestamp,
+            score=0.0,
+            status="error",
+            sources=len(sources),
+            claims=len(previous_claims),
+            unsupported=0,
+            gaps=len(gaps),
+            backend=llm.name,
+            search_backend=search_backend.name,
+            description=f"synthesis failed: {exc}",
+        )
+        raise
     evaluation = evaluate_report(candidate.report_markdown, candidate.claims, sources, candidate.gaps)
     best_score = float(previous_eval.get("best_score") or 0.0)
     has_report = bool(candidate.report_markdown.strip())
@@ -119,8 +147,6 @@ def run_iteration(
 
     write_text(iteration_dir / "candidate_report.md", candidate.report_markdown + "\n")
     write_jsonl(iteration_dir / "candidate_claims.jsonl", [claim.to_dict() for claim in candidate.claims])
-    write_jsonl(iteration_dir / "added_sources.jsonl", [source.to_dict() for source in added_sources])
-    write_json(iteration_dir / "queries.json", {"queries": queries})
     write_json(iteration_dir / "evaluation.json", evaluation.to_dict())
     write_text(iteration_dir / "summary.md", _format_iteration_summary(candidate.summary, evaluation, status))
 

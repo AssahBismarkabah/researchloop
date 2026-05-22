@@ -7,6 +7,9 @@
     "reddit.com",
     "youtube.com"
   ],
+  "extract_after_search": true,
+  "extract_depth": "basic",
+  "extract_format": "markdown",
   "include_domains": [],
   "notes": [
     "Keep credentials in .env. Keep source-selection rules in this file.",

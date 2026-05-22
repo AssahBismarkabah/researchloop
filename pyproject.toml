@@ -17,6 +17,7 @@ py-modules = [
     "models",
     "researchloop",
     "prompts",
+    "retry",
     "scoring",
     "search",
     "source_policy",

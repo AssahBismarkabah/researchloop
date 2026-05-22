@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 POLICY_FILENAME = "source_policy.json"
 VALID_SEARCH_DEPTHS = {"basic", "advanced"}
 VALID_TIME_RANGES = {"day", "week", "month", "year"}
+VALID_EXTRACT_FORMATS = {"markdown", "text"}
 
 
 DEFAULT_EXCLUDE_DOMAINS = [
@@ -27,6 +28,9 @@ class SourcePolicy:
     version: int = 1
     search_depth: str = "advanced"
     time_range: str | None = None
+    extract_after_search: bool = True
+    extract_depth: str = "basic"
+    extract_format: str = "markdown"
     include_domains: list[str] = field(default_factory=list)
     exclude_domains: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDE_DOMAINS))
     preferred_source_types: list[str] = field(
@@ -61,6 +65,17 @@ class SourcePolicy:
             raise ValueError(
                 f"source policy time_range must be one of {sorted(VALID_TIME_RANGES)}, got {self.time_range!r}"
             )
+        self.extract_after_search = _as_bool(self.extract_after_search)
+        self.extract_depth = str(self.extract_depth).strip().lower()
+        if self.extract_depth not in VALID_SEARCH_DEPTHS:
+            raise ValueError(
+                f"source policy extract_depth must be one of {sorted(VALID_SEARCH_DEPTHS)}, got {self.extract_depth!r}"
+            )
+        self.extract_format = str(self.extract_format).strip().lower()
+        if self.extract_format not in VALID_EXTRACT_FORMATS:
+            raise ValueError(
+                f"source policy extract_format must be one of {sorted(VALID_EXTRACT_FORMATS)}, got {self.extract_format!r}"
+            )
         self.include_domains = _clean_domains(_as_list(self.include_domains))
         self.exclude_domains = _clean_domains(_as_list(self.exclude_domains))
         self.preferred_source_types = _clean_strings(_as_list(self.preferred_source_types))
@@ -76,6 +91,9 @@ class SourcePolicy:
             version=int(data.get("version") or 1),
             search_depth=str(data.get("search_depth") or "advanced"),
             time_range=data.get("time_range"),
+            extract_after_search=data.get("extract_after_search", True),
+            extract_depth=str(data.get("extract_depth") or "basic"),
+            extract_format=str(data.get("extract_format") or "markdown"),
             include_domains=_as_list(data.get("include_domains") or []),
             exclude_domains=_as_list(data.get("exclude_domains") or []),
             preferred_source_types=_as_list(data.get("preferred_source_types") or []),
@@ -87,6 +105,9 @@ class SourcePolicy:
             "version": self.version,
             "search_depth": self.search_depth,
             "time_range": self.time_range,
+            "extract_after_search": self.extract_after_search,
+            "extract_depth": self.extract_depth,
+            "extract_format": self.extract_format,
             "include_domains": self.include_domains,
             "exclude_domains": self.exclude_domains,
             "preferred_source_types": self.preferred_source_types,
@@ -146,6 +167,19 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, tuple):
         return list(value)
     return [value]
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(value)
 
 
 def _clean_domains(values: list[Any]) -> list[str]:
