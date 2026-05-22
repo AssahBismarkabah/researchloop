@@ -447,11 +447,36 @@ INDEX_HTML = """<!doctype html>
     }
 
     .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
       border: 1px solid var(--border);
       border-radius: 999px;
       color: var(--muted);
       padding: 3px 10px;
       font-size: 12px;
+    }
+
+    .status-pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--muted);
+    }
+
+    .status-pill[data-state="connected"]::before,
+    .status-pill[data-state="done"]::before {
+      background: var(--success);
+    }
+
+    .status-pill[data-state="running"]::before {
+      background: #0a0a0a;
+    }
+
+    .status-pill[data-state="error"]::before,
+    .status-pill[data-state="disconnected"]::before {
+      background: var(--danger);
     }
 
     main {
@@ -911,7 +936,7 @@ INDEX_HTML = """<!doctype html>
           <button class="tab" type="button" data-view="researchesView">Researches</button>
         </nav>
       </div>
-      <div class="status-pill" id="topStatus">Local</div>
+      <div class="status-pill" id="topStatus" data-state="checking">Checking local</div>
     </header>
 
     <main>
@@ -989,6 +1014,7 @@ INDEX_HTML = """<!doctype html>
     const researchesList = document.getElementById("researchesList");
     const refreshResearches = document.getElementById("refreshResearches");
     let pollTimer = null;
+    let statusMode = "idle";
 
     tabs.forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -1055,7 +1081,13 @@ INDEX_HTML = """<!doctype html>
       question.disabled = running;
       progress.classList.toggle("is-visible", running);
       errorBox.classList.remove("is-visible");
-      topStatus.textContent = running ? "Running" : "Local";
+      if (running) {
+        statusMode = "running";
+        setStatus("Running locally", "running");
+      } else if (statusMode === "running") {
+        statusMode = "idle";
+        checkConnection();
+      }
     }
 
     function updateProgress(job) {
@@ -1071,7 +1103,8 @@ INDEX_HTML = """<!doctype html>
       result.classList.add("is-visible");
       result.classList.remove("is-collapsed");
       toggleResult.textContent = "Hide report";
-      topStatus.textContent = "Done";
+      statusMode = "done";
+      setStatus("Done locally", "done");
       reportText.innerHTML = renderMarkdown(data.report || "");
       evalText.innerHTML = renderMarkdown(`Workspace: ${data.workspace}\\n\\n${data.eval || ""}`);
       metrics.innerHTML = "";
@@ -1187,7 +1220,8 @@ INDEX_HTML = """<!doctype html>
     function showError(message) {
       errorBox.textContent = message;
       errorBox.classList.add("is-visible");
-      topStatus.textContent = "Error";
+      statusMode = "error";
+      setStatus("Local error", "error");
     }
 
     function hideResult() {
@@ -1370,6 +1404,24 @@ INDEX_HTML = """<!doctype html>
       return String(value).replace("T", " ").replace("Z", "");
     }
 
+    function setStatus(text, state) {
+      topStatus.textContent = text;
+      topStatus.dataset.state = state;
+    }
+
+    async function checkConnection() {
+      if (statusMode !== "idle") return;
+      try {
+        const response = await fetch("/api/health", { cache: "no-store" });
+        if (!response.ok) throw new Error("health check failed");
+        setStatus("Connected locally", "connected");
+      } catch (_error) {
+        setStatus("Disconnected", "disconnected");
+      }
+    }
+
+    checkConnection();
+    setInterval(checkConnection, 5000);
     loadResearches();
   </script>
 </body>
