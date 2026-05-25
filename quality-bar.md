@@ -24,7 +24,8 @@ At this level, the system is good enough when it can:
 
 The tools already chosen are enough for this level:
 
-- OpenAI-compatible chat completions for model portability;
+- native Gemini for the current default model backend;
+- OpenAI-compatible chat completions for provider portability;
 - Tavily Search and Extract for normal web source collection;
 - plain files for auditability and repeatable runs;
 - a local verifier for citation and evidence hygiene;

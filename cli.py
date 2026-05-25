@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--backend",
         default=None,
-        choices=["openai-compatible", "openai", "chat-completions"],
+        choices=["openai-compatible", "openai", "chat-completions", "gemini", "google-gemini"],
         help=argparse.SUPPRESS,
     )
     run_parser.add_argument("--model", default=None, help=argparse.SUPPRESS)

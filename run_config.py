@@ -7,7 +7,7 @@ from typing import Any
 
 
 RUN_CONFIG_FILENAME = "run_config.json"
-VALID_BACKENDS = {"openai-compatible", "openai", "chat-completions"}
+VALID_BACKENDS = {"openai-compatible", "openai", "chat-completions", "gemini", "google-gemini"}
 VALID_SEARCH_BACKENDS = {"none", "tavily"}
 VALID_SYNTHESIS_MODES = {"json", "markdown"}
 

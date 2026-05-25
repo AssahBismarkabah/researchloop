@@ -5,6 +5,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from typing import Any
@@ -242,9 +243,184 @@ class OpenAICompatibleLLM(ResearchLLM):
         return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=total_attempts)
 
 
+class GeminiLLM(ResearchLLM):
+    """Native Gemini generateContent adapter."""
+
+    name = "gemini"
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        temperature: float = 0.2,
+        timeout: int = 90,
+        synthesis_mode: str | None = None,
+        thinking_budget: int | None = None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv("GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model = model or os.getenv("GEMINI_MODEL") or os.getenv("RESEARCH_MODEL") or "gemini-2.5-flash"
+        self.temperature = temperature
+        self.timeout = int(os.getenv("GEMINI_TIMEOUT") or os.getenv("RESEARCH_LLM_TIMEOUT", str(timeout)))
+        self.attempts = max(1, int(os.getenv("GEMINI_RETRY_ATTEMPTS") or os.getenv("RESEARCH_LLM_RETRY_ATTEMPTS", "2")))
+        self.synthesis_mode = (synthesis_mode or os.getenv("RESEARCH_SYNTHESIS_MODE", "markdown")).strip().lower()
+        if self.synthesis_mode not in {"json", "markdown"}:
+            raise LLMError("synthesis_mode must be 'json' or 'markdown'.")
+        if thinking_budget is None:
+            budget = os.getenv("GEMINI_THINKING_BUDGET", "0").strip()
+            self.thinking_budget = int(budget) if budget else None
+        else:
+            self.thinking_budget = thinking_budget
+        if not self.api_key:
+            raise LLMError("Missing API key. Set GEMINI_API_KEY for the gemini backend.")
+
+    def plan_queries(self, topic: str, previous_report: str, gaps: list[str]) -> list[str]:
+        try:
+            payload = self._complete_json(query_plan_prompt(topic, previous_report, gaps))
+        except (LLMError, json.JSONDecodeError):
+            return [_extract_question(topic)]
+        queries = payload.get("queries") or []
+        return [str(query).strip() for query in queries if str(query).strip()][:5]
+
+    def synthesize(
+        self,
+        topic: str,
+        sources: list[Source],
+        previous_report: str,
+        previous_claims: list[Claim],
+    ) -> ResearchResult:
+        if self.synthesis_mode == "markdown":
+            return self._synthesize_markdown(topic, sources, previous_report, previous_claims)
+        try:
+            payload = self._complete_json(synthesis_prompt(topic, sources, previous_report, previous_claims))
+        except (LLMError, json.JSONDecodeError):
+            return self._synthesize_markdown(topic, sources, previous_report, previous_claims)
+        report_markdown = str(payload.get("report_markdown") or "").strip()
+        claims = _claims_from_report(report_markdown)
+        if not report_markdown:
+            report_markdown = _build_report_markdown(
+                topic=topic,
+                sources=sources,
+                current_answer=payload.get("current_answer") or [],
+                evidence=payload.get("evidence") or [],
+                gaps=payload.get("gaps") or [],
+            )
+            claims = _claims_from_report(report_markdown)
+        return ResearchResult(
+            report_markdown=report_markdown,
+            claims=claims,
+            gaps=[str(item) for item in payload.get("gaps") or _gaps_from_report(report_markdown)],
+            summary=str(payload.get("summary") or ""),
+        )
+
+    def _synthesize_markdown(
+        self,
+        topic: str,
+        sources: list[Source],
+        previous_report: str,
+        previous_claims: list[Claim],
+    ) -> ResearchResult:
+        try:
+            report_markdown = self._complete_text(
+                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims),
+                attempts=1,
+            )
+        except LLMError as exc:
+            if not exc.retryable:
+                raise
+            report_markdown = self._complete_text(
+                markdown_synthesis_prompt(
+                    topic,
+                    sources,
+                    previous_report,
+                    previous_claims,
+                    source_limit=8,
+                    source_chars=120,
+                    topic_chars=1800,
+                    word_limit=700,
+                    compact=True,
+                ),
+                max_tokens=int(os.getenv("RESEARCH_COMPACT_TEXT_MAX_TOKENS", "1800")),
+                attempts=1,
+            )
+        return ResearchResult(
+            report_markdown=report_markdown.strip(),
+            claims=_claims_from_report(report_markdown),
+            gaps=_gaps_from_report(report_markdown),
+            summary="Generated as Markdown and extracted claims from the report.",
+        )
+
+    def _complete_json(self, user_prompt: str) -> dict[str, Any]:
+        content = self._complete_text(
+            user_prompt + "\n\nReturn only valid JSON.",
+            max_tokens=int(os.getenv("RESEARCH_MAX_TOKENS", "1800")),
+        )
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError as exc:
+                    raise LLMError("The Gemini response contained malformed JSON.") from exc
+            raise LLMError("The Gemini response was not valid JSON.")
+
+    def _complete_text(self, user_prompt: str, max_tokens: int | None = None, attempts: int | None = None) -> str:
+        generation_config: dict[str, Any] = {
+            "temperature": self.temperature,
+            "maxOutputTokens": max_tokens
+            if max_tokens is not None
+            else int(os.getenv("RESEARCH_TEXT_MAX_TOKENS") or os.getenv("RESEARCH_MAX_TOKENS", "2800")),
+        }
+        if self.thinking_budget is not None:
+            generation_config["thinkingConfig"] = {"thinkingBudget": self.thinking_budget}
+        body = {
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": generation_config,
+        }
+        data = self._post_generate_content(body, attempts=attempts)
+        return _extract_gemini_content(data)
+
+    def _post_generate_content(self, body: dict[str, Any], attempts: int | None = None) -> dict[str, Any]:
+        model_path = urllib.parse.quote(self.model.removeprefix("models/"), safe="")
+
+        def once() -> dict[str, Any]:
+            request = urllib.request.Request(
+                f"{self.base_url}/models/{model_path}:generateContent",
+                data=json.dumps(body).encode("utf-8"),
+                headers={
+                    "x-goog-api-key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                retryable = exc.code in {429, 500, 502, 503, 504}
+                raise LLMError(f"Gemini endpoint returned HTTP {exc.code}: {detail}", retryable=retryable) from exc
+            except urllib.error.URLError as exc:
+                raise LLMError(
+                    f"Could not reach Gemini endpoint: {exc}",
+                    retryable=_is_retryable_url_error(exc),
+                ) from exc
+            except _RETRYABLE_TRANSPORT_ERRORS as exc:
+                raise LLMError(f"Gemini endpoint transport error: {exc}", retryable=True) from exc
+
+        total_attempts = attempts if attempts is not None else self.attempts
+        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=total_attempts)
+
+
 def build_llm(name: str, model: str | None = None, synthesis_mode: str | None = None) -> ResearchLLM:
     if name in {"openai-compatible", "openai", "chat-completions"}:
         return OpenAICompatibleLLM(model=model, synthesis_mode=synthesis_mode)
+    if name in {"gemini", "google-gemini"}:
+        return GeminiLLM(model=model, synthesis_mode=synthesis_mode)
     raise ValueError(f"Unknown LLM backend: {name}")
 
 
@@ -263,6 +439,21 @@ def _extract_chat_content(data: dict[str, Any]) -> str:
                 parts.append(str(item.get("text") or item.get("content") or ""))
         return "".join(parts)
     raise LLMError("LLM endpoint returned an unsupported message content shape.")
+
+
+def _extract_gemini_content(data: dict[str, Any]) -> str:
+    candidates = data.get("candidates") or []
+    if not candidates:
+        feedback = data.get("promptFeedback") or {}
+        raise LLMError(f"Gemini endpoint returned no candidates: {feedback}")
+    candidate = candidates[0]
+    content = candidate.get("content") or {}
+    parts = content.get("parts") or []
+    text = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict) and not part.get("thought"))
+    if text:
+        return text
+    finish_reason = candidate.get("finishReason") or "unknown"
+    raise LLMError(f"Gemini endpoint returned no text content; finishReason={finish_reason}.")
 
 
 def _is_retryable_url_error(exc: urllib.error.URLError) -> bool:

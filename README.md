@@ -140,34 +140,14 @@ other high-stakes research.
 
 ## Configuration
 
-The LLM adapter uses OpenAI-compatible chat completions, not OpenAI-specific
-Responses APIs.
+`run_config.json` chooses the model backend. The local default is native Gemini
+through Google's `generateContent` API. OpenAI-compatible chat completions are
+still supported for other providers.
 
-Set these in `.env` or your shell:
-
-```bash
-OPENAI_COMPAT_BASE_URL="https://your-compatible-host/v1"
-OPENAI_COMPAT_API_KEY="..."
-RESEARCH_MODEL="your-model-name"
-```
-
-Aliases are also accepted:
-
-```bash
-OPENAI_BASE_URL="https://api.openai.com/v1"
-OPENAI_API_KEY="..."
-OPENAI_MODEL="gpt-4o-mini"
-```
-
-The request path is:
-
-```text
-POST {base_url}/chat/completions
-```
-
-JSON synthesis uses `response_format: {"type": "json_object"}` when the
-endpoint supports it. The default run config uses Markdown synthesis because it
-works across more OpenAI-compatible endpoints.
+For Gemini, keep the API key in `.env`; `GEMINI_MODEL` and
+`GEMINI_THINKING_BUDGET` are optional. For OpenAI-compatible providers, use the
+existing `OPENAI_COMPAT_*` settings. Markdown synthesis remains the default
+because it works across providers.
 
 ## Search Policy
 
@@ -213,7 +193,7 @@ The checked-in default is source-backed web research:
 
 ```json
 {
-  "backend": "openai-compatible",
+  "backend": "gemini",
   "search_backend": "tavily",
   "synthesis_mode": "markdown",
   "max_results": 5,

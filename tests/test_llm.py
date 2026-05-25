@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 import urllib.request
 
-from llm import LLMError, OpenAICompatibleLLM, markdown_synthesis_prompt
+from llm import GeminiLLM, LLMError, OpenAICompatibleLLM, build_llm, markdown_synthesis_prompt
 from models import Source
 
 
@@ -35,6 +36,9 @@ class TimeoutThenSuccessLLM(OpenAICompatibleLLM):
 
 
 class FakeResponse:
+    def __init__(self, payload: dict[str, object] | None = None) -> None:
+        self.payload = payload or {"choices": [{"message": {"content": "Recovered"}}]}
+
     def __enter__(self) -> "FakeResponse":
         return self
 
@@ -42,7 +46,7 @@ class FakeResponse:
         return None
 
     def read(self) -> bytes:
-        return json.dumps({"choices": [{"message": {"content": "Recovered"}}]}).encode("utf-8")
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class LLMTests(unittest.TestCase):
@@ -130,6 +134,58 @@ Internal policy.""",
         finally:
             urllib.request.urlopen = original_urlopen  # type: ignore[assignment]
         self.assertEqual(calls, 2)
+
+    def test_gemini_complete_text_uses_native_generate_content_api(self) -> None:
+        llm = GeminiLLM(api_key="gemini-key", model="gemini-2.5-flash", thinking_budget=0)
+        captured: dict[str, object] = {}
+        original_urlopen = urllib.request.urlopen
+
+        def fake_urlopen(request: urllib.request.Request, timeout: int) -> FakeResponse:
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["body"] = json.loads(request.data.decode("utf-8"))  # type: ignore[union-attr]
+            return FakeResponse(
+                {
+                    "candidates": [
+                        {
+                            "content": {"parts": [{"text": "Recovered"}]},
+                            "finishReason": "STOP",
+                        }
+                    ]
+                }
+            )
+
+        urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            self.assertEqual(llm._complete_text("hello", attempts=1), "Recovered")
+        finally:
+            urllib.request.urlopen = original_urlopen  # type: ignore[assignment]
+
+        self.assertEqual(
+            captured["url"],
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        )
+        headers = captured["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertNotIn("Authorization", headers)
+        body = captured["body"]
+        self.assertIsInstance(body, dict)
+        self.assertEqual(body["contents"][0]["role"], "user")
+        self.assertIn("system_instruction", body)
+        self.assertEqual(body["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
+
+    def test_build_llm_supports_gemini_backend(self) -> None:
+        original_key = os.environ.get("GEMINI_API_KEY")
+        os.environ["GEMINI_API_KEY"] = "gemini-key"
+        try:
+            llm = build_llm("gemini", model="gemini-2.5-flash", synthesis_mode="markdown")
+        finally:
+            if original_key is None:
+                os.environ.pop("GEMINI_API_KEY", None)
+            else:
+                os.environ["GEMINI_API_KEY"] = original_key
+
+        self.assertIsInstance(llm, GeminiLLM)
 
 
 if __name__ == "__main__":
