@@ -23,6 +23,7 @@ py-modules = [
     "search",
     "source_policy",
     "storage",
+    "task_requirements",
     "ui",
 ]
 

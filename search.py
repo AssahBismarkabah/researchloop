@@ -6,7 +6,8 @@ import re
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from models import Source
 from retry import call_with_retries
@@ -51,6 +52,9 @@ class TavilySearch(SearchBackend):
             raise SearchError("Missing TAVILY_API_KEY for Tavily search.")
 
     def search(self, query: str, max_results: int) -> list[Source]:
+        direct_url = _direct_url(query)
+        if direct_url:
+            return self._fetch_url(direct_url, query)
         body = {
             "query": query,
             "search_depth": self.source_policy.search_depth,
@@ -58,6 +62,8 @@ class TavilySearch(SearchBackend):
             "include_answer": False,
             "include_raw_content": True,
         }
+        if self.source_policy.start_date or self.source_policy.end_date or self.source_policy.time_range:
+            body["topic"] = "news"
         if self.source_policy.include_domains:
             body["include_domains"] = self.source_policy.include_domains
         if self.source_policy.exclude_domains:
@@ -103,6 +109,28 @@ class TavilySearch(SearchBackend):
             self._extract_sources(sources)
         return sources
 
+    def _fetch_url(self, url: str, query: str) -> list[Source]:
+        source = Source(
+            id="",
+            title=url,
+            url=url,
+            content="",
+            retrieved_at=utc_now(),
+            source_type="web",
+            query=query,
+            metadata={
+                "explicit_fetch": True,
+                "source_policy_version": self.source_policy.version,
+                "source_policy_time_range": self.source_policy.time_range,
+                "source_policy_start_date": self.source_policy.start_date,
+                "source_policy_end_date": self.source_policy.end_date,
+            },
+        )
+        self._extract_sources([source])
+        if source.metadata.get("extract_failed") and not source.content:
+            return []
+        return [source]
+
     def _extract_sources(self, sources: list[Source]) -> None:
         url_sources = [source for source in sources if source.url]
         for chunk in _chunks(url_sources, 20):
@@ -134,7 +162,7 @@ class TavilySearch(SearchBackend):
 
     def _result_date_allowed(self, result_date: date | None) -> bool:
         if result_date is None:
-            return True
+            return not (self.source_policy.start_date or self.source_policy.end_date)
         start = _parse_result_date(self.source_policy.start_date)
         end = _parse_result_date(self.source_policy.end_date)
         if start and result_date < start:
@@ -185,12 +213,26 @@ def _chunks(values: list[Source], size: int) -> list[list[Source]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
 
 
+def _direct_url(query: str) -> str | None:
+    match = re.search(r"https?://[^\s`\"')]+", query.strip())
+    if not match:
+        return None
+    url = match.group(0).rstrip(".,;:")
+    parsed = urlparse(url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return url
+    return None
+
+
 def _result_date(result: object) -> date | None:
     if not isinstance(result, dict):
         return None
     published = _parse_result_date(result.get("published_date"))
     if published is not None:
         return published
+    twitter_date = _twitter_status_date(result.get("url"))
+    if twitter_date is not None:
+        return twitter_date
     for field in ("url", "title"):
         inferred = _find_date_in_text(result.get(field))
         if inferred is not None:
@@ -236,6 +278,24 @@ def _find_date_in_text(value: object) -> date | None:
         except ValueError:
             continue
     return _parse_result_date(text)
+
+
+def _twitter_status_date(value: object) -> date | None:
+    if value is None:
+        return None
+    parsed = urlparse(str(value))
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if host not in {"x.com", "twitter.com", "mobile.twitter.com"}:
+        return None
+    match = re.search(r"/(?:i/)?status(?:es)?/(\d+)", parsed.path)
+    if not match:
+        return None
+    try:
+        snowflake = int(match.group(1))
+    except ValueError:
+        return None
+    timestamp_ms = (snowflake >> 22) + 1288834974657
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).date()
 
 
 def _time_range_floor(time_range: str | None) -> date | None:

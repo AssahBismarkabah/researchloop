@@ -47,6 +47,34 @@ class LLMTests(unittest.TestCase):
         self.assertNotIn("[S3]", prompt)
         self.assertIn("[truncated]", prompt)
 
+    def test_markdown_prompt_preserves_full_user_deliverable(self) -> None:
+        prompt = markdown_synthesis_prompt(
+            topic="""# Research Topic
+
+## Question
+
+Tech Briefing Generation
+
+## Core Task: Generate Tech Briefing
+
+## Problems & Pain Points
+
+## Investment Opportunities
+
+## Source Policy
+
+Internal policy.""",
+            sources=[make_source(1)],
+            previous_report="",
+            previous_claims=[],
+        )
+
+        self.assertIn("## Core Task: Generate Tech Briefing", prompt)
+        self.assertIn("## Problems & Pain Points", prompt)
+        self.assertIn("## Investment Opportunities", prompt)
+        self.assertNotIn("Internal policy", prompt)
+        self.assertIn("Do not explain \"Tech Briefing Generation\"", prompt)
+
     def test_markdown_synthesis_retries_with_compact_prompt_after_timeout(self) -> None:
         llm = TimeoutThenSuccessLLM()
 

@@ -313,7 +313,7 @@ def markdown_synthesis_prompt(
     max_sources = source_limit if source_limit is not None else int(os.getenv("RESEARCH_SYNTHESIS_SOURCE_LIMIT", "14"))
     max_source_chars = source_chars if source_chars is not None else int(os.getenv("RESEARCH_SYNTHESIS_SOURCE_CHARS", "180"))
     max_topic_chars = topic_chars if topic_chars is not None else int(os.getenv("RESEARCH_SYNTHESIS_TOPIC_CHARS", "3200"))
-    question = _limit_text(_extract_question(topic), max_topic_chars)
+    user_request = _limit_text(_extract_user_request(topic), max_topic_chars)
     for source in sources[:max_sources]:
         content = source.content.strip().replace("\x00", "")
         source_blocks.append(
@@ -323,8 +323,8 @@ def markdown_synthesis_prompt(
         )
     source_text = "\n\n---\n\n".join(source_blocks) or "No sources supplied."
     mode_note = "This is a compact retry after the provider timed out. " if compact else ""
-    return f"""Research topic:
-{question}
+    return f"""User request:
+{user_request}
 
 Previous report:
 {previous_report[:800] if previous_report else "No prior report."}
@@ -335,7 +335,7 @@ Source records:
 {source_text}
 
 Write Markdown only. Use these exact sections:
-# Research Report
+# Tech Briefing
 ## Question
 ## Current Answer
 ## Evidence
@@ -344,12 +344,23 @@ Write Markdown only. Use these exact sections:
 
 Rules:
 - {mode_note}Prefer the strongest supported findings over exhaustive coverage.
+- Produce the requested deliverable. Do not explain "Tech Briefing Generation"
+  as a concept unless the user explicitly asks for that explanation.
+- Under ## Question, restate the requested briefing in one sentence.
+- Under ## Current Answer, write the actual briefing. If the request names
+  sections, categories, Problems & Pain Points, or Investment Opportunities,
+  preserve those sections as subheadings inside ## Current Answer.
+- If the request asks for today's news or a last-12/24-hour window, only use
+  supplied sources that are plausibly from that window. Treat stale or undated
+  search results as unusable unless they are live pages that were explicitly
+  fetched by URL.
+- Include headline, 1-2 sentence summary, and source URL when the user asks for
+  them.
+- If the user requests an external delivery destination that the runner cannot
+  access, record that as an open gap. Do not claim it was delivered.
 - Every substantive bullet or sentence must cite supplied source IDs like [S1].
 - Do not cite source IDs that were not supplied.
 - Do not use emoji or decorative symbols in headings.
-- Under ## Current Answer, preserve explicit formatting requirements from the
-  research topic. If the topic asks for categories, Problems & Pain Points, or
-  Investment Opportunities, include those subsections there.
 - Keep the report under {word_limit} words.
 - Prefer synthesis over source-by-source summary.
 - Include 6-8 evidence bullets.
@@ -404,6 +415,23 @@ def _limit_text(value: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "\n[truncated]"
+
+
+def _extract_user_request(topic: str) -> str:
+    lines = topic.splitlines()
+    request_lines: list[str] = []
+    in_question = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower() == "## question":
+            in_question = True
+            continue
+        if in_question and stripped.lower() == "## source policy":
+            break
+        if in_question:
+            request_lines.append(line)
+    text = "\n".join(request_lines).strip()
+    return text or topic.strip()
 
 
 def _extract_question(topic: str) -> str:

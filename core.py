@@ -26,6 +26,7 @@ from storage import (
     write_jsonl,
     write_text,
 )
+from task_requirements import missing_requirements
 
 
 ProgressCallback = Callable[[str, str, dict[str, object]], None]
@@ -183,6 +184,7 @@ def run_iteration(
         claim_count=len(candidate.claims),
     )
     evaluation = evaluate_report(candidate.report_markdown, candidate.claims, sources, candidate.gaps)
+    _apply_task_compliance(topic, candidate.report_markdown, evaluation)
     best_score = float(previous_eval.get("best_score") or 0.0)
     has_report = bool(candidate.report_markdown.strip())
     keep = has_report and evaluation.score > 0 and (best_score == 0.0 or evaluation.score >= best_score + min_delta)
@@ -317,6 +319,14 @@ def _emit_progress(
     payload = dict(metadata)
     payload["detail"] = detail
     progress(step, title, payload)
+
+
+def _apply_task_compliance(topic: str, report_markdown: str, evaluation: Evaluation) -> None:
+    missing = missing_requirements(topic, report_markdown)
+    if not missing:
+        return
+    evaluation.score = 0.0
+    evaluation.notes.append("Missing requested deliverable section(s): " + ", ".join(missing))
 
 
 def _next_iteration_id(workspace: Path) -> str:

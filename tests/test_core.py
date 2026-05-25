@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from core import add_manual_source, init_workspace, run_iteration
@@ -101,6 +101,11 @@ class OneSourceSearch(SearchBackend):
         ]
 
 
+def _twitter_snowflake(day: date) -> int:
+    timestamp_ms = int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000)
+    return (timestamp_ms - 1288834974657) << 22
+
+
 class CoreTests(unittest.TestCase):
     def test_workspace_lifecycle_keeps_improved_iteration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,6 +133,28 @@ class CoreTests(unittest.TestCase):
             self.assertIn("keep", read_text(workspace / "results.tsv"))
             self.assertIn(("synthesis", "Writing candidate report"), progress)
             self.assertEqual(progress[-1][0], "done")
+
+    def test_missing_requested_deliverable_sections_are_not_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = init_workspace(
+                Path(tmp),
+                "briefing compliance",
+                "Generate a tech briefing with Problems & Pain Points and Investment Opportunities.",
+            )
+            add_manual_source(
+                workspace,
+                title="Seed source",
+                url="local://seed",
+                content="The seed source supports a grounded candidate report.",
+            )
+
+            result = run_iteration(workspace, FixedLLM(), NoSearch())
+
+            self.assertEqual(result["status"], "discard")
+            self.assertEqual(result["score"], 0.0)
+            self.assertIn("No kept report yet", read_text(workspace / "report.md"))
+            evaluation = result["evaluation"]
+            self.assertIn("Missing requested deliverable section", "\n".join(evaluation.notes))
 
     def test_init_writes_reviewable_source_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -240,6 +267,7 @@ class CoreTests(unittest.TestCase):
             api_key="test-key",
             source_policy=SourcePolicy(extract_after_search=True),
         )
+        status_id = _twitter_snowflake(date(2026, 5, 22))
 
         def fake_post(path: str, body: dict[str, object]) -> dict[str, object]:
             if path == "/search":
@@ -261,6 +289,18 @@ class CoreTests(unittest.TestCase):
                             "score": 0.6,
                         },
                         {
+                            "title": "Undated profile result",
+                            "url": "https://x.com/example",
+                            "content": "profile",
+                            "score": 0.8,
+                        },
+                        {
+                            "title": "Today tweet result",
+                            "url": f"https://x.com/example/status/{status_id}",
+                            "content": "tweet",
+                            "score": 0.95,
+                        },
+                        {
                             "title": "Short result",
                             "url": "https://example.com/article",
                             "content": "short",
@@ -270,9 +310,16 @@ class CoreTests(unittest.TestCase):
                     ]
                 }
             if path == "/extract":
-                self.assertEqual(body["urls"], ["https://example.com/article"])
+                self.assertEqual(
+                    body["urls"],
+                    [f"https://x.com/example/status/{status_id}", "https://example.com/article"],
+                )
                 return {
                     "results": [
+                        {
+                            "url": f"https://x.com/example/status/{status_id}",
+                            "raw_content": "today tweet extracted content",
+                        },
                         {
                             "url": "https://example.com/article",
                             "raw_content": "long extracted markdown content",
@@ -287,12 +334,41 @@ class CoreTests(unittest.TestCase):
 
         sources = search.search("test query", max_results=1)
 
-        self.assertEqual(len(sources), 1)
-        self.assertEqual(sources[0].content, "long extracted markdown content")
-        self.assertEqual(sources[0].metadata["source_policy_start_date"], "2026-05-22")
+        self.assertEqual(len(sources), 2)
         self.assertEqual(sources[0].metadata["result_date"], "2026-05-22")
-        self.assertTrue(sources[0].metadata["extract_attempted"])
-        self.assertTrue(sources[0].metadata["extracted"])
+        self.assertEqual(sources[1].content, "long extracted markdown content")
+        self.assertEqual(sources[1].metadata["source_policy_start_date"], "2026-05-22")
+        self.assertEqual(sources[1].metadata["result_date"], "2026-05-22")
+        self.assertTrue(sources[1].metadata["extract_attempted"])
+        self.assertTrue(sources[1].metadata["extracted"])
+
+    def test_tavily_fetches_literal_url_queries(self) -> None:
+        search = TavilySearch(
+            api_key="test-key",
+            source_policy=SourcePolicy(start_date="2026-05-22", end_date="2026-05-23"),
+        )
+
+        def fake_post(path: str, body: dict[str, object]) -> dict[str, object]:
+            self.assertEqual(path, "/extract")
+            self.assertEqual(body["urls"], ["https://news.ycombinator.com"])
+            return {
+                "results": [
+                    {
+                        "url": "https://news.ycombinator.com",
+                        "raw_content": "front page story list",
+                    }
+                ],
+                "failed_results": [],
+            }
+
+        search._post_json = fake_post  # type: ignore[method-assign]
+
+        sources = search.search("web_fetch https://news.ycombinator.com", max_results=5)
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].url, "https://news.ycombinator.com")
+        self.assertEqual(sources[0].content, "front page story list")
+        self.assertTrue(sources[0].metadata["explicit_fetch"])
 
     def test_synthesis_failure_preserves_collected_sources_and_logs_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
