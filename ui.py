@@ -234,7 +234,11 @@ def workspace_summary(workspace: Path) -> dict[str, Any]:
     state = read_json(workspace / "state.json", {"best_score": 0.0, "best_iteration": None})
     sources = load_sources(workspace)
     last_result = _last_result_row(workspace)
-    status = last_result.get("status") or ("done" if state.get("best_iteration") else "ready")
+    status = last_result.get("status")
+    if not status and _has_interrupted_iteration(workspace):
+        status = "interrupted"
+    if not status:
+        status = "done" if state.get("best_iteration") else "ready"
     question = question_from_topic(read_text(workspace / "topic.md"))
     return {
         "name": workspace.name,
@@ -243,7 +247,7 @@ def workspace_summary(workspace: Path) -> dict[str, Any]:
         "title": research_display_title(question),
         "excerpt": research_display_excerpt(question),
         "status": status,
-        "stage": status.title(),
+        "stage": "Interrupted" if status == "interrupted" else status.title(),
         "score": float(state.get("best_score") or 0.0),
         "source_count": len(sources),
         "best_iteration": state.get("best_iteration"),
@@ -339,6 +343,23 @@ def _last_result_row(workspace: Path) -> dict[str, str]:
     headers = rows[0].split("\t")
     values = rows[-1].split("\t")
     return dict(zip(headers, values))
+
+
+def _has_interrupted_iteration(workspace: Path) -> bool:
+    iterations = workspace / "iterations"
+    if not iterations.exists():
+        return False
+    for iteration in iterations.iterdir():
+        if not iteration.is_dir():
+            continue
+        if any(
+            (iteration / filename).exists()
+            for filename in ("candidate_report.md", "evaluation.json", "summary.md", "error.json")
+        ):
+            continue
+        if (iteration / "queries.json").exists() or (iteration / "added_sources.jsonl").exists():
+            return True
+    return False
 
 
 def _mtime_utc(path: Path) -> str:

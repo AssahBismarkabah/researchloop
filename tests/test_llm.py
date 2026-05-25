@@ -24,9 +24,11 @@ class TimeoutThenSuccessLLM(OpenAICompatibleLLM):
     def __init__(self) -> None:
         super().__init__(api_key="test-key", model="test-model", synthesis_mode="markdown")
         self.prompts: list[str] = []
+        self.attempts_seen: list[int | None] = []
 
     def _complete_text(self, user_prompt: str, max_tokens: int | None = None, attempts: int | None = None) -> str:
         self.prompts.append(user_prompt)
+        self.attempts_seen.append(attempts)
         if len(self.prompts) == 1:
             raise LLMError("synthetic timeout", retryable=True)
         return "# Research Report\n\n## Current Answer\n\nRecovered [S1].\n"
@@ -100,8 +102,15 @@ Internal policy.""",
 
         self.assertIn("Recovered", result.report_markdown)
         self.assertEqual(len(llm.prompts), 2)
+        self.assertEqual(llm.attempts_seen, [1, 1])
         self.assertIn("compact retry", llm.prompts[1])
         self.assertNotIn("[S9]", llm.prompts[1])
+
+    def test_llm_default_retry_budget_is_bounded(self) -> None:
+        llm = OpenAICompatibleLLM(api_key="test-key", model="test-model")
+
+        self.assertEqual(llm.timeout, 90)
+        self.assertEqual(llm.attempts, 2)
 
     def test_complete_text_retries_after_connection_reset(self) -> None:
         llm = OpenAICompatibleLLM(api_key="test-key", model="test-model")

@@ -91,6 +91,19 @@ class UITests(unittest.TestCase):
             self.assertEqual(summaries[0]["score"], 91.0)
             self.assertEqual(summaries[0]["source_count"], 1)
 
+    def test_workspace_summary_marks_abandoned_iteration_as_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = init_workspace(root, "abandoned research", "What got interrupted?")
+            iteration = workspace / "iterations" / "20260525T094431Z-001"
+            iteration.mkdir(parents=True)
+            write_json(iteration / "queries.json", {"queries": ["slow query"]})
+
+            summaries = list_research_summaries(root)
+
+            self.assertEqual(summaries[0]["status"], "interrupted")
+            self.assertEqual(summaries[0]["stage"], "Interrupted")
+
     def test_list_researches_includes_queued_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = ResearchUI(root=Path(tmp))

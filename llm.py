@@ -58,7 +58,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         api_key: str | None = None,
         model: str | None = None,
         temperature: float = 0.2,
-        timeout: int = 240,
+        timeout: int = 90,
         synthesis_mode: str | None = None,
     ) -> None:
         self.base_url = (
@@ -71,6 +71,7 @@ class OpenAICompatibleLLM(ResearchLLM):
         self.model = model or os.getenv("RESEARCH_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
         self.temperature = temperature
         self.timeout = int(os.getenv("RESEARCH_LLM_TIMEOUT", str(timeout)))
+        self.attempts = max(1, int(os.getenv("RESEARCH_LLM_RETRY_ATTEMPTS", "2")))
         self.synthesis_mode = (synthesis_mode or os.getenv("RESEARCH_SYNTHESIS_MODE", "json")).strip().lower()
         if self.synthesis_mode not in {"json", "markdown"}:
             raise LLMError("synthesis_mode must be 'json' or 'markdown'.")
@@ -138,7 +139,8 @@ class OpenAICompatibleLLM(ResearchLLM):
     ) -> ResearchResult:
         try:
             report_markdown = self._complete_text(
-                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims)
+                markdown_synthesis_prompt(topic, sources, previous_report, previous_claims),
+                attempts=1,
             )
         except LLMError as exc:
             if not exc.retryable:
@@ -236,7 +238,8 @@ class OpenAICompatibleLLM(ResearchLLM):
             except _RETRYABLE_TRANSPORT_ERRORS as exc:
                 raise LLMError(f"LLM endpoint transport error: {exc}", retryable=True) from exc
 
-        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=attempts)
+        total_attempts = attempts if attempts is not None else self.attempts
+        return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=total_attempts)
 
 
 def build_llm(name: str, model: str | None = None, synthesis_mode: str | None = None) -> ResearchLLM:
