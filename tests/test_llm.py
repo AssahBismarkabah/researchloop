@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import unittest
+import urllib.request
 
 from llm import LLMError, OpenAICompatibleLLM, markdown_synthesis_prompt
 from models import Source
@@ -28,6 +30,17 @@ class TimeoutThenSuccessLLM(OpenAICompatibleLLM):
         if len(self.prompts) == 1:
             raise LLMError("synthetic timeout", retryable=True)
         return "# Research Report\n\n## Current Answer\n\nRecovered [S1].\n"
+
+
+class FakeResponse:
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps({"choices": [{"message": {"content": "Recovered"}}]}).encode("utf-8")
 
 
 class LLMTests(unittest.TestCase):
@@ -89,6 +102,25 @@ Internal policy.""",
         self.assertEqual(len(llm.prompts), 2)
         self.assertIn("compact retry", llm.prompts[1])
         self.assertNotIn("[S9]", llm.prompts[1])
+
+    def test_complete_text_retries_after_connection_reset(self) -> None:
+        llm = OpenAICompatibleLLM(api_key="test-key", model="test-model")
+        calls = 0
+        original_urlopen = urllib.request.urlopen
+
+        def fake_urlopen(request: urllib.request.Request, timeout: int) -> FakeResponse:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionResetError(54, "Connection reset by peer")
+            return FakeResponse()
+
+        urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            self.assertEqual(llm._complete_text("hello", attempts=2), "Recovered")
+        finally:
+            urllib.request.urlopen = original_urlopen  # type: ignore[assignment]
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":

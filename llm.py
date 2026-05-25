@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -17,6 +18,15 @@ class LLMError(RuntimeError):
     def __init__(self, message: str, retryable: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+_RETRYABLE_TRANSPORT_ERRORS = (
+    TimeoutError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    http.client.RemoteDisconnected,
+)
 
 
 class ResearchLLM(ABC):
@@ -219,9 +229,12 @@ class OpenAICompatibleLLM(ResearchLLM):
                 retryable = exc.code in {429, 500, 502, 503, 504}
                 raise LLMError(f"LLM endpoint returned HTTP {exc.code}: {detail}", retryable=retryable) from exc
             except urllib.error.URLError as exc:
-                raise LLMError(f"Could not reach LLM endpoint: {exc}") from exc
-            except TimeoutError as exc:
-                raise LLMError(f"LLM endpoint timed out after {self.timeout} seconds.", retryable=True) from exc
+                raise LLMError(
+                    f"Could not reach LLM endpoint: {exc}",
+                    retryable=_is_retryable_url_error(exc),
+                ) from exc
+            except _RETRYABLE_TRANSPORT_ERRORS as exc:
+                raise LLMError(f"LLM endpoint transport error: {exc}", retryable=True) from exc
 
         return call_with_retries(once, lambda exc: bool(getattr(exc, "retryable", False)), attempts=attempts)
 
@@ -247,6 +260,10 @@ def _extract_chat_content(data: dict[str, Any]) -> str:
                 parts.append(str(item.get("text") or item.get("content") or ""))
         return "".join(parts)
     raise LLMError("LLM endpoint returned an unsupported message content shape.")
+
+
+def _is_retryable_url_error(exc: urllib.error.URLError) -> bool:
+    return isinstance(getattr(exc, "reason", None), _RETRYABLE_TRANSPORT_ERRORS)
 
 
 def _build_report_markdown(
